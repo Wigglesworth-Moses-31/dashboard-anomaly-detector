@@ -1,0 +1,23 @@
+# The Config Service's own settings stay local: it cannot fetch them from itself.
+server:
+  port: 8888
+
+spring:
+  application:
+    name: config-service
+  cloud:
+    config:
+      server:
+        git:
+          uri: ${CONFIG_REPO_URI}          # file:// URI of config-repo/, set by the start script
+          default-label: main
+          clone-on-start: true
+          refresh-rate: 0                  # read the latest commit on every request
+  kafka:
+    bootstrap-servers: localhost:59092     # for Spring Cloud Bus
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,busrefresh         # busrefresh: called by config-repo's post-commit hook

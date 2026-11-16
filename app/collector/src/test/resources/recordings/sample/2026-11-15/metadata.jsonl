@@ -1,0 +1,9 @@
+{"at":1794732230970,"request":"trace.redis.command.hits","answer":{"type":"count","unit":"hit"}}
+{"at":1794732230985,"request":"trace.grpc.request","answer":{"type":"distribution","unit":"second"}}
+{"at":1794732231543,"request":"trace.grpc.client.hits","answer":{"type":"count","unit":"hit"}}
+{"at":1794732236752,"request":"trace.grpc.client","answer":{"type":"distribution","unit":"second"}}
+{"at":1794732237331,"request":"trace.http.request","answer":{"type":"distribution","unit":"second"}}
+{"at":1794732237772,"request":"trace.grpc.server.hits","answer":{"type":"count","unit":"hit"}}
+{"at":1794732238475,"request":"trace.grpc.request.hits","answer":{"type":"count","unit":"hit"}}
+{"at":1794732241709,"request":"trace.grpc.server","answer":{"type":"distribution","unit":"second"}}
+{"at":1794732243239,"request":"trace.http.request.hits","answer":{"type":"count","unit":"hit"}}

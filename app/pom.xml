@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Parent build for the anomaly-detection system. See openspec/changes/add-system-architecture/design.md -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.0.9</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>lab.anomaly</groupId>
+  <artifactId>anomaly-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>anomaly-parent</name>
+
+  <modules>
+    <module>contracts</module>
+    <module>service-kit</module>
+    <module>config-service</module>
+    <module>collector</module>
+    <module>store</module>
+    <module>detector</module>
+    <module>notifier</module>
+    <module>reporter</module>
+  </modules>
+
+  <properties>
+    <java.version>25</java.version>
+    <!-- Spring Cloud 2025.1.x is the released line for Spring Boot 4.0.x -->
+    <spring-cloud.version>2025.1.4</spring-cloud.version>
+    <!-- Spring gRPC 1.0.x is the released line for Spring Boot 4.0.x -->
+    <spring-grpc.version>1.0.3</spring-grpc.version>
+    <!-- Same Protobuf version that Spring gRPC 1.0.3 uses, so generated code and runtime match -->
+    <protobuf.version>4.33.4</protobuf.version>
+    <protobuf-maven-plugin.version>5.1.12</protobuf-maven-plugin.version>
+    <!-- Same gRPC version that Spring gRPC 1.0.3 uses -->
+    <grpc.version>1.77.1</grpc.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.grpc</groupId>
+        <artifactId>spring-grpc-dependencies</artifactId>
+        <version>${spring-grpc.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>lab.anomaly</groupId>
+        <artifactId>contracts</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>lab.anomaly</groupId>
+        <artifactId>service-kit</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <plugins>
+      <!-- Fail fast if the build runs on the wrong Java: run `source ../env.sh` first -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>require-java-25</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <version>[25,26)</version>
+                  <message>This project needs Java 25. Run: source ../env.sh</message>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,37 @@
+server:
+  port: 8101
+
+anomaly:
+  collector:
+    source: datadog                           # datadog | replay
+    replay-dir: recordings/my-run             # only for source: replay (a folder written by recording)
+    datadog-site: __DD_SITE__                 # datadoghq.com (US1), datadoghq.eu, us3.datadoghq.com, us5.datadoghq.com, ...
+    dashboards:                               # dashboard ids to watch (from the URL: app.datadoghq.com/dashboard/<id>/...)
+__DASHBOARDS__
+    poll-interval: 15s                        # how often to ask for new data
+    step: 10s                                 # size of each data step (highest value per step)
+    backfill: 10m                             # how much history to fetch at start
+    recent-window: 2m                         # how much to fetch on each later poll
+    dashboard-refresh: 60m                    # how often to re-read dashboard definitions
+
+    # --- everything below is read live; no code change needed ---
+    dashboard-filters: {}                     # values for a dashboard's $placeholders; without one, the dashboard's default is used
+    #  "[abc-123-xyz]":                       #   example: dashboard abc-123-xyz, $env = prod
+    #    env: prod
+    classification:                           # kind and unit of a line; first match wins; otherwise Datadog's metric metadata
+      - match: { has-formula: true, panel-title: "*Success Rate*" }
+        set: { kind: ratio, unit: percent }
+    #  - match: { metric: "myapp.*.latency" }  #   example: your own metric names
+    #    set: { kind: latency, unit: ms }
+    max-concurrent-requests: 8                # bulkhead: calls to Datadog at the same time
+    rate-limit-share: 0.8                     # use 80% of the limit Datadog reports
+    retries: 3
+    retry-base: 500ms                         # waits grow 0.5s, 1s, 2s... (random, capped)
+    retry-cap: 8s
+    breaker-failures: 5                       # a panel failing 5 times in a row is paused...
+    breaker-open: 5m                          # ...for 5 minutes, then tried once
+    metadata-ttl: 24h                         # how long Datadog's type/unit of a metric is trusted
+    metadata-cache-size: 10000
+    recording:
+      enabled: false                          # save every answer to files (for replay tests)
+      dir: recordings

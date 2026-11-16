@@ -1,0 +1,26 @@
+server:
+  port: 8102
+
+spring:
+  grpc:
+    server:
+      port: ${anomaly.store.grpc-port}      # one place to set it: anomaly.store.grpc-port
+  datasource:
+    url: jdbc:postgresql://localhost:55432/anomaly?reWriteBatchedInserts=true
+    username: anomaly
+    password: ${PLATFORM_DB_PASSWORD}       # from the environment (scripts/system.sh), never written here
+  flyway:
+    schemas: metrics                        # tables and Flyway's own history live in schema metrics
+    create-schemas: false                   # the schema is made by platform/init-db
+
+anomaly:
+  store:
+    grpc-port: 9102
+    # --- add-store (lab system: nothing kept longer than 7 days; defaults 2 days) ---
+    raw-safety-limit: 2d                      # raw 10-second points never kept longer
+    summary-retention: 2d                     # per-minute summaries kept
+    max-batch-records: 500                    # records per poll and per database write
+    poll-timeout: 200ms
+    history-max-range: 7d                     # longest window one question may ask
+    max-database-size: 1GB                    # above this the Store's health is DEGRADED (size alarm)
+    size-check-interval: 1m

@@ -1,0 +1,36 @@
+# --- Secrets: never commit -------------------------------------------------------
+# Datadog API and application keys live here. .env.example (no values) stays tracked.
+.env
+*.env
+.env.*
+!.env.example
+
+# --- Build output -----------------------------------------------------------------
+target/
+*.class
+*.log
+
+# --- IDE and OS files -------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# --- Tools ----------------------------------------------------------------------
+node_modules/
+
+# --- Settings repository ------------------------------------------------------------
+# config-repo/ is your own settings, its own Git repository (made by scripts/setup.sh from config-template/).
+/config-repo/
+
+# --- Running system: logs and process ids (scripts/system.sh). Leading / = only at the top, not Java packages named run
+/run/
+
+# --- Collector recordings (large, regenerated); a small sample lives in app/collector/src/test/resources --
+/recordings/
+
+# --- Reporter output ------------------------------------------------------------------
+/reports/
+
+# --- Optional local Java setup (scripts source it if present) --------------------------
+/env.sh

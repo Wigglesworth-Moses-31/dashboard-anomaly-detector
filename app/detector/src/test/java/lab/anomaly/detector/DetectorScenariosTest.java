@@ -1,0 +1,501 @@
+package lab.anomaly.detector;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import lab.anomaly.contracts.v1.EventType;
+import lab.anomaly.contracts.v1.Incident;
+import lab.anomaly.contracts.v1.Kind;
+import lab.anomaly.contracts.v1.SeriesDescriptor;
+import lab.anomaly.detector.incident.IncidentBook.Change;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tasks 3.2, 3.3 and 4.1: the spec's judging, silence and grouping scenarios on the detection core, with the real
+ * default settings from config-repo/detector.yml. Times are data times (10-second steps), never the clock.
+ */
+class DetectorScenariosTest {
+
+    static final long T0 = 1_763_200_000_000L;          // a step boundary
+    static final long STEP = 10_000;
+    static final String LAB = "w2f-pqs-ghd";
+    static final String LAB_TITLE = "Lab: API platform";
+
+    private Detector detector;
+    private final List<Change> changes = new ArrayList<>();
+    private final AtomicInteger ids = new AtomicInteger();
+
+    @BeforeEach
+    void setUp() {
+        detector = new Detector(() -> "inc-" + ids.incrementAndGet());
+        detector.configure(Fixtures.defaults(), 1);
+    }
+
+    // ---- helpers ----------------------------------------------------------------------------------------------
+
+    static SeriesDescriptor latency(String id, String api) {
+        return Fixtures.line(id, "lab.api.latency", Kind.KIND_LATENCY, "ms", Map.of("api", api, "http_method", "get"), LAB, LAB_TITLE, "Latencies");
+    }
+
+    static SeriesDescriptor successRate(String id, Map<String, String> tags, String panel) {
+        return Fixtures.line(id, "lab.api.request.count", Kind.KIND_COUNT, "requests", tags, LAB, LAB_TITLE, panel);
+    }
+
+    static SeriesDescriptor count(String id, Map<String, String> tags, String panel) {
+        return Fixtures.line(id, "lab.api.request.count", Kind.KIND_COUNT, "requests", tags, LAB, LAB_TITLE, panel);
+    }
+
+    private SeriesDescriptor add(SeriesDescriptor d) {
+        detector.describe(d);
+        return d;
+    }
+
+    /** Feeds one value; returns the changes it caused (also kept in {@link #changes}). */
+    private List<Change> value(SeriesDescriptor d, long ts, double v) {
+        List<Change> c = detector.accept(d.getSeriesId(), ts, v, false, ts + 20_000);
+        changes.addAll(c);
+        return c;
+    }
+
+    /** {@code n} normal values from {@code from}, wobbling by +-2 around {@code normal}. Returns the next step time. */
+    private long normal(SeriesDescriptor d, long from, int n, double normal) {
+        for (int i = 0; i < n; i++) {
+            value(d, from + i * STEP, normal + (i % 5) - 2);
+        }
+        return from + n * STEP;
+    }
+
+    private List<Change> of(EventType type) {
+        return changes.stream().filter(c -> c.type() == type).toList();
+    }
+
+    private static final int WARM = 90;                  // 15 minutes of history, more than min-history (10 min)
+
+    // ---- judging ----------------------------------------------------------------------------------------------
+
+    @Test
+    void latencyJumpOpensAnIncidentOnTheSecondStep() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        assertThat(value(inv, t, 1213)).isEmpty();
+        List<Change> second = value(inv, t + STEP, 1194);
+        assertThat(second).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_OPENED);
+            assertThat(c.incident().getTitle()).isEqualTo("/v1/invoices: latency up");
+            assertThat(c.incident().getStartedMs()).isEqualTo(t);
+            assertThat(c.incident().getSeries(0).getNormalValue()).isEqualTo(138.0);
+            assertThat(c.incident().getSeries(0).getPeakValue()).isEqualTo(1213.0);
+            assertThat(c.incident().getSeries(0).getPanelTitle()).isEqualTo("Latencies");
+            assertThat(c.incident().getLinks(0).getUrl()).startsWith("https://app.datadoghq.com/dashboard/" + LAB + "?from_ts=");
+        });
+    }
+
+    @Test
+    void oneOddStepOpensNothing() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        normal(inv, t + STEP, 30, 138);
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void aStricterLatencyRuleNeedsThreeSteps() {
+        DetectorSettings strict = Fixtures.holderEdited(t -> t.replace("min-change: 50\n        steps: 2", "min-change: 50\n        steps: 3")).get();
+        detector.configure(strict, 2);
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1194);
+        assertThat(changes).as("2 steps no longer enough").isEmpty();
+        t = normal(inv, t + 2 * STEP, 30, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1194);
+        value(inv, t + 2 * STEP, 1300);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
+    }
+
+    @Test
+    void successRateIsJudgedInPoints() {
+        SeriesDescriptor sr = add(successRate("ffff000000000002", Map.of("api", "/v1/invoices", "http_method", "get"), "Success Rates"));
+        long t = normal(sr, T0, WARM, 99);
+        for (int i = 0; i < 5; i++) {
+            value(sr, t + i * STEP, 95);                          // 4 points below 99: a wobble
+        }
+        assertThat(changes).isEmpty();
+        t = normal(sr, t + 5 * STEP, 30, 99);
+        value(sr, t, 74);
+        value(sr, t + STEP, 74);
+        assertThat(changes).as("rates need 3 steps").isEmpty();
+        value(sr, t + 2 * STEP, 74);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getTitle()).isEqualTo("/v1/invoices: success rate down"));
+    }
+
+    @Test
+    void aLowTrafficSuccessRateDoesNotAlarmOnChance() {
+        SeriesDescriptor sr = add(successRate("ffff000000000012", Map.of("api", "/v1/firmware", "http_method", "get"), "Success Rates"));
+        double[] noisy = {100, 100, 85.7, 100, 100, 71.4, 100, 100, 100, 85.7};   // one failure in 7 = 14 points
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(sr, t, noisy[i % noisy.length]);
+            t += STEP;
+        }
+        value(sr, t, 85);
+        value(sr, t + STEP, 85);
+        value(sr, t + 2 * STEP, 85);
+        assertThat(changes).isEmpty();
+        value(sr, t + 3 * STEP, 40);
+        value(sr, t + 4 * STEP, 40);
+        value(sr, t + 5 * STEP, 40);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).as("a real fall still alarms").hasSize(1);
+    }
+
+    @Test
+    void errorRateRisingOpensAnIncident() {
+        SeriesDescriptor er = add(Fixtures.line("ffff000000000003", "lab.http.requests", Kind.KIND_COUNT, "requests",
+                Map.of("service", "billing"), "jrp-8af-7xd", "Swagstore", "Server error (5xx) rate % per service"));
+        long t = normal(er, T0, WARM, 3);
+        value(er, t, 26);
+        value(er, t + STEP, 26);
+        value(er, t + 2 * STEP, 26);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getTitle()).isEqualTo("billing: error rate up"));
+    }
+
+    @Test
+    void trafficIsWatchedBothWays() {
+        SeriesDescriptor partner = add(count("ffff000000000004", Map.of("api", "/v1/invoices", "partner", "globex"), "API Requests by Partner"));
+        SeriesDescriptor svc = add(Fixtures.line("ffff000000000005", "lab.http.requests", Kind.KIND_COUNT, "requests",
+                Map.of("service", "orders"), "jrp-8af-7xd", "Swagstore", "Requests per service"));
+        long t = normal(partner, T0, WARM, 30);
+        normal(svc, T0, WARM, 50);
+        value(partner, t, 8);
+        value(partner, t + STEP, 8);
+        value(svc, t, 200);
+        value(svc, t + STEP, 200);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getTitle())
+                .containsExactlyInAnyOrder("/v1/invoices: traffic down", "orders: traffic up");
+    }
+
+    @Test
+    void fromZeroErrorsToOneIsNotAnIncident() {
+        SeriesDescriptor e = add(count("ffff000000000006", Map.of("api", "/v1/invoices", "status_code", "500"), "Count"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(e, t, 0);
+            t += STEP;
+        }
+        value(e, t, 1);
+        value(e, t + STEP, 1);
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void aPartialStepIsNeverJudged() {
+        SeriesDescriptor sr = add(successRate("ffff000000000002", Map.of("api", "/v1/invoices"), "Success Rates"));
+        long t = normal(sr, T0, WARM, 99);
+        changes.addAll(detector.accept(sr.getSeriesId(), t, 40, true, t));
+        changes.addAll(detector.accept(sr.getSeriesId(), t, 40, true, t));
+        value(sr, t, 99);
+        value(sr, t + STEP, 99);
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void theSameStepTwiceCountsOnce() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t, 1213);                                       // a repeat: must not count as the second step
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void anUnknownLineIsWatchedByTheGeneralRule() {
+        SeriesDescriptor q = add(Fixtures.line("ffff000000000007", "lab.queue.depth", Kind.KIND_GAUGE, "", Map.of(), LAB, LAB_TITLE, "Queue depth"));
+        long t = normal(q, T0, WARM, 100);
+        for (int i = 0; i < 5; i++) {
+            value(q, t + i * STEP, 150);                          // half again: not twice
+        }
+        assertThat(changes).isEmpty();
+        t = normal(q, t + 5 * STEP, 30, 100);
+        for (int i = 0; i < 3; i++) {
+            value(q, t + i * STEP, 300);
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
+    }
+
+    // ---- calm period ------------------------------------------------------------------------------------------
+
+    @Test
+    void aFlappingLineKeepsOneIncidentWhichClosesAfterTwoCalmMinutes() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1194);                                // opened
+        t = normal(inv, t + 2 * STEP, 3, 138);                     // 30 s calm
+        value(inv, t, 1300);                                       // spikes again
+        value(inv, t + STEP, 1250);
+        long firstCalm = t + 2 * STEP;
+        normal(inv, firstCalm, 13, 138);                           // 130 s calm
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).singleElement().satisfies(c -> {
+            assertThat(c.incident().getEndedMs()).isEqualTo(firstCalm);
+            assertThat(c.incident().getSeries(0).getPeakValue()).isEqualTo(1300.0);
+        });
+    }
+
+    @Test
+    void aSpikeReadAfterItsGroupClosedReopensTheSameIncident() {
+        SeriesDescriptor lat = add(latency("ffff000000000001", "/v1/telemetry"));
+        SeriesDescriptor p95 = add(Fixtures.line("ffff000000000013", "lab.api.latency", Kind.KIND_LATENCY, "ms",
+                Map.of("api", "/v1/telemetry", "http_method", "post"), LAB, LAB_TITLE, "Latencies"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(lat, t + i * STEP, 60);
+            value(p95, t + i * STEP, 60);
+        }
+        t += WARM * STEP;
+        long spike = t;
+        // Line 1 is read ahead: spike, then calm for 2+ minutes, so the incident closes.
+        value(lat, t, 600);
+        value(lat, t + STEP, 600);
+        normal(lat, t + 2 * STEP, 14, 60);
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+        // Line 2's values from the same moments arrive later: it spiked 20 s after line 1 started.
+        normal(p95, t, 2, 60);
+        value(p95, spike + 2 * STEP, 600);
+        value(p95, spike + 3 * STEP, 600);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).as("no second incident").hasSize(1);
+        Change last = changes.get(changes.size() - 1);
+        assertThat(last.type()).isEqualTo(EventType.EVENT_TYPE_UPDATED);
+        assertThat(last.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_OPEN);
+        assertThat(last.incident().getSeriesCount()).isEqualTo(2);
+    }
+
+    @Test
+    void aLastingChangeBecomesTheNewNormalAndTheIncidentCloses() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        normal(inv, t, 6 * 60, 800);                               // an hour at a new level
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+    }
+
+    // ---- silence ----------------------------------------------------------------------------------------------
+
+    @Test
+    void anUpstreamThatStopsWhileItsDashboardContinuesIsSilent() {
+        SeriesDescriptor up = add(count("ffff000000000008", Map.of("upstream_service", "payments", "status_code", "200"), "Request Counts"));
+        SeriesDescriptor other = add(count("ffff000000000009", Map.of("upstream_service", "billing-core", "status_code", "200"), "Request Counts"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(up, t, 30 + i % 3);
+            value(other, t, 40 + i % 3);
+            t += STEP;
+        }
+        for (int i = 0; i < 8; i++) {                              // 80 s: only the other line keeps arriving
+            value(other, t, 40);
+            changes.addAll(detector.checkSilence(t));
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement().satisfies(c -> {
+            assertThat(c.incident().getTitle()).isEqualTo("upstream payments: traffic silent");
+            assertThat(c.incident().getUpstream()).isTrue();
+            assertThat(c.incident().getSeries(0).getReason()).isEqualTo("silent");
+        });
+    }
+
+    @Test
+    void aRareErrorCodeDoesNotAlarmOnSilence() {
+        SeriesDescriptor rare = add(count("ffff00000000000a", Map.of("upstream_service", "payments", "status_code", "503"), "Request Counts"));
+        SeriesDescriptor other = add(count("ffff000000000009", Map.of("upstream_service", "billing-core", "status_code", "200"), "Request Counts"));
+        long t = T0;
+        for (int i = 0; i < WARM + 60; i++) {
+            if (i % 10 == 0 && i < WARM) {
+                value(rare, t, 1);
+            }
+            value(other, t, 40);
+            changes.addAll(detector.checkSilence(t));
+            t += STEP;
+        }
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void anErrorLineThatStopsReportingIsNotAnIncident() {
+        SeriesDescriptor err = add(count("ffff000000000014", Map.of("upstream_service", "payments", "status_code", "500"), "Request Counts"));
+        SeriesDescriptor other = add(count("ffff000000000009", Map.of("upstream_service", "billing-core", "status_code", "200"), "Request Counts"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(err, t, 1);
+            value(other, t, 40);
+            t += STEP;
+        }
+        for (int i = 0; i < 12; i++) {
+            value(other, t, 40);
+            changes.addAll(detector.checkSilence(t));
+            t += STEP;
+        }
+        assertThat(changes).isEmpty();
+    }
+
+    @Test
+    void aWholeDashboardStoppingIsACollectionProblemNotIncidents() {
+        SeriesDescriptor a = add(count("ffff00000000000b", Map.of("service", "a"), "Requests per service"));
+        SeriesDescriptor b = add(Fixtures.line("ffff00000000000c", "lab.http.requests", Kind.KIND_COUNT, "requests",
+                Map.of("service", "b"), "jrp-8af-7xd", "Swagstore", "Requests per service"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(a, t, 30);
+            value(b, t, 30);
+            t += STEP;
+        }
+        for (int i = 0; i < 12; i++) {                             // the lab dashboard stops; Swagstore continues
+            value(b, t, 30);
+            changes.addAll(detector.checkSilence(t));
+            t += STEP;
+        }
+        assertThat(changes).isEmpty();
+        assertThat(detector.view().dashboardsNotArriving()).containsExactly(LAB_TITLE);
+    }
+
+    // ---- grouping ---------------------------------------------------------------------------------------------
+
+    @Test
+    void latencySuccessRateAndErrorsOfOneApiAreOneIncident() {
+        SeriesDescriptor lat = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor sr = add(successRate("ffff000000000002", Map.of("api", "/v1/invoices", "http_method", "get"), "Success Rates"));
+        SeriesDescriptor err = add(count("ffff000000000006", Map.of("api", "/v1/invoices", "status_code", "500"), "Count"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(lat, t, 138 + i % 3);
+            value(sr, t, 99);
+            value(err, t, 2);
+            t += STEP;
+        }
+        for (int i = 0; i < 3; i++) {
+            value(lat, t, 1213);
+            value(sr, t, 74);
+            value(err, t, 30);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
+        Incident last = changes.get(changes.size() - 1).incident();
+        assertThat(last.getTitle()).isEqualTo("/v1/invoices: latency up, errors up, success rate down");
+        assertThat(last.getSeriesCount()).isEqualTo(3);
+        assertThat(last.getGroupKey()).isEqualTo("api=/v1/invoices");
+    }
+
+    @Test
+    void twoApisAtOnceAreTwoIncidents() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor ord = add(latency("ffff00000000000d", "/v1/orders"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(inv, t, 138);
+            value(ord, t, 90);
+            t += STEP;
+        }
+        for (int i = 0; i < 2; i++) {
+            value(inv, t, 1213);
+            value(ord, t, 900);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getGroupKey())
+                .containsExactlyInAnyOrder("api=/v1/invoices", "api=/v1/orders");
+    }
+
+    @Test
+    void anUpstreamIncidentSaysUpstream() {
+        SeriesDescriptor sr = add(successRate("ffff00000000000e", Map.of("upstream_service", "payments"), "Success Rates"));
+        SeriesDescriptor lat = add(Fixtures.line("ffff00000000000f", "lab.upstream.latency", Kind.KIND_LATENCY, "ms",
+                Map.of("upstream_service", "payments"), LAB, LAB_TITLE, "Latencies"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(sr, t, 99);
+            value(lat, t, 138);
+            t += STEP;
+        }
+        for (int i = 0; i < 3; i++) {
+            value(sr, t, 74);
+            value(lat, t, 1213);
+            t += STEP;
+        }
+        Incident last = changes.get(changes.size() - 1).incident();
+        assertThat(last.getTitle()).isEqualTo("upstream payments: latency up, success rate down");
+        assertThat(last.getUpstream()).isTrue();
+    }
+
+    @Test
+    void aNewDashboardWithAnEndpointTagIsGroupedByDashboardUntilTheTagIsAdded() {
+        SeriesDescriptor a = add(Fixtures.line("ffff000000000010", "pay.latency", Kind.KIND_LATENCY, "ms",
+                Map.of("endpoint", "/pay"), "pay-dash", "Payments platform", "Latency"));
+        SeriesDescriptor b = add(Fixtures.line("ffff000000000011", "pay.latency", Kind.KIND_LATENCY, "ms",
+                Map.of("endpoint", "/refund"), "pay-dash", "Payments platform", "Latency"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(a, t, 100);
+            value(b, t, 100);
+            t += STEP;
+        }
+        for (int i = 0; i < 2; i++) {
+            value(a, t, 900);
+            value(b, t, 900);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getTitle()).isEqualTo("Payments platform: latency up"));
+        assertThat(detector.view().groupedByDashboard()).isEqualTo(2);
+
+        detector.configure(Fixtures.holderEdited(text -> text.replace("group-by: [api,", "group-by: [endpoint, api,")).get(), 2);
+        t = normal(a, t, 14, 100);                                 // calm: the first incident closes
+        normal(b, t - 14 * STEP, 14, 100);
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+        changes.clear();
+        for (int i = 0; i < 2; i++) {
+            value(a, t, 900);
+            value(b, t, 900);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getTitle())
+                .containsExactlyInAnyOrder("/pay: latency up", "/refund: latency up");
+    }
+
+    // ---- restart ----------------------------------------------------------------------------------------------
+
+    @Test
+    void afterARestartTheOpenIncidentContinuesAndClosesWithoutASecondOne() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1194);
+        Change opened = of(EventType.EVENT_TYPE_OPENED).get(0);
+
+        Detector restarted = new Detector(() -> "inc-new");
+        restarted.configure(Fixtures.defaults(), 1);
+        restarted.restore(opened.incident(), opened.sequence());
+        restarted.describe(inv);
+        long[] times = new long[WARM];
+        double[] values = new double[WARM];
+        for (int i = 0; i < WARM; i++) {
+            times[i] = T0 + i * STEP;
+            values[i] = 138;
+        }
+        restarted.warm(inv.getSeriesId(), times, values);
+        List<Change> after = new ArrayList<>();
+        for (int i = 0; i < 14; i++) {
+            after.addAll(restarted.accept(inv.getSeriesId(), t + (2 + i) * STEP, 138, false, 0));
+        }
+        assertThat(after).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_CLOSED);
+            assertThat(c.incident().getIncidentId()).isEqualTo(opened.incident().getIncidentId());
+            assertThat(c.sequence()).isEqualTo(opened.sequence() + 1);
+        });
+    }
+}

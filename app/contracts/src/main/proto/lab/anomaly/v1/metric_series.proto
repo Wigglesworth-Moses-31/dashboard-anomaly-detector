@@ -1,0 +1,66 @@
+// What one metric line is (design C1, C2). Sent when a line is first seen or changes.
+// Kafka topic metric-series (compacted), key = series_id.
+// Compatibility rules (design C6): never change a field's number, name, type or repeat-ness; to remove a
+// field, `reserved` its number and name. Adding fields is always safe.
+syntax = "proto3";
+
+package lab.anomaly.v1;
+
+option java_package = "lab.anomaly.contracts.v1";
+option java_multiple_files = true;
+option java_outer_classname = "MetricSeriesProto";
+
+message SeriesDescriptor {
+  string series_id = 1;                 // 16 hex characters, see SeriesIds (design C3)
+  Source source = 2;
+  string query_id = 3;                  // 16 hex characters: hash of the normalised query text
+  string query_text = 4;                // the source's own query; only the Collector interprets it
+  string metric = 5;                    // e.g. lab.api.request.count
+  map<string, string> group_tags = 6;   // what makes this line different, e.g. api, status_code
+  Aggregation space_aggregation = 7;    // how many sources were combined into this line
+  Aggregation time_aggregation = 8;     // how each step was built (MAX keeps short spikes)
+  int32 step_seconds = 9;
+  Kind kind = 10;
+  string unit = 11;
+  repeated View views = 12;             // every dashboard panel showing this line
+  string classified_by = 13;            // which setting decided kind and unit: "rule:<n>", "metadata", "default"
+  int64 first_seen_ms = 14;             // UTC milliseconds
+  int64 updated_ms = 15;                // UTC milliseconds
+}
+
+message Source {
+  string system = 1;                    // e.g. "datadog": the only vendor-specific value
+  string instance = 2;                  // which account or server, e.g. "datadoghq.com"
+}
+
+message View {
+  string view_id = 1;                   // dashboard id
+  string view_title = 2;
+  string panel_title = 3;
+}
+
+// Starts at UNSPECIFIED = 0 so a value that was never set is visible (design C2).
+enum Aggregation {
+  AGGREGATION_UNSPECIFIED = 0;
+  AGGREGATION_SUM = 1;
+  AGGREGATION_AVG = 2;
+  AGGREGATION_MIN = 3;
+  AGGREGATION_MAX = 4;
+  AGGREGATION_COUNT = 5;
+  AGGREGATION_LAST = 6;
+  AGGREGATION_P50 = 7;
+  AGGREGATION_P75 = 8;
+  AGGREGATION_P90 = 9;
+  AGGREGATION_P95 = 10;
+  AGGREGATION_P99 = 11;
+}
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_UNKNOWN = 1;                     // no setting describes it: the Detector stays cautious
+  KIND_COUNT = 2;
+  KIND_RATE = 3;
+  KIND_GAUGE = 4;
+  KIND_LATENCY = 5;
+  KIND_RATIO = 6;
+}

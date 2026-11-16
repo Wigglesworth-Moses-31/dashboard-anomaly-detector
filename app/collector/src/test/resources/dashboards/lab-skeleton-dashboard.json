@@ -1,0 +1,849 @@
+{
+    "title": "Lab: API platform (skeleton structure)",
+    "description": "The skeleton layout, pointed at the lab metrics sent by traffic/traffic.py",
+    "widgets": [
+        {
+            "id": 100000000001,
+            "definition": {
+                "title": "API Gateway Metrics",
+                "background_color": "vivid_yellow",
+                "show_title": true,
+                "type": "group",
+                "layout_type": "ordered",
+                "widgets": [
+                    {
+                        "id": 100000000002,
+                        "definition": {
+                            "title": "Request Counts by Status Code",
+                            "title_size": "16",
+                            "title_align": "left",
+                            "show_legend": true,
+                            "legend_layout": "horizontal",
+                            "legend_columns": [
+                                "avg",
+                                "min",
+                                "max",
+                                "value",
+                                "sum"
+                            ],
+                            "type": "timeseries",
+                            "requests": [
+                                {
+                                    "formulas": [
+                                        {
+                                            "formula": "query1"
+                                        }
+                                    ],
+                                    "queries": [
+                                        {
+                                            "query": "sum:lab.gateway.request.count{$team,$service,$env,$region} by {status_code}.as_count()",
+                                            "data_source": "metrics",
+                                            "name": "query1"
+                                        }
+                                    ],
+                                    "response_format": "timeseries",
+                                    "style": {
+                                        "palette": "semantic",
+                                        "line_type": "solid",
+                                        "line_width": "normal"
+                                    },
+                                    "display_type": "bars"
+                                }
+                            ],
+                            "yaxis": {
+                                "include_zero": false
+                            },
+                            "markers": []
+                        },
+                        "layout": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 4,
+                            "height": 3
+                        }
+                    },
+                    {
+                        "id": 100000000003,
+                        "definition": {
+                            "title": "Success Rate",
+                            "title_size": "16",
+                            "title_align": "left",
+                            "show_legend": false,
+                            "legend_layout": "vertical",
+                            "legend_columns": [
+                                "avg",
+                                "min",
+                                "max",
+                                "value",
+                                "sum"
+                            ],
+                            "type": "timeseries",
+                            "requests": [
+                                {
+                                    "formulas": [
+                                        {
+                                            "alias": "Success Rate",
+                                            "formula": "query1 / query2 * 100"
+                                        }
+                                    ],
+                                    "queries": [
+                                        {
+                                            "query": "sum:lab.gateway.request.count{$team,$service,$env,$region,status_code:2*}.as_count()",
+                                            "data_source": "metrics",
+                                            "name": "query1"
+                                        },
+                                        {
+                                            "query": "sum:lab.gateway.request.count{$team,$service,$env,$region}.as_count()",
+                                            "data_source": "metrics",
+                                            "name": "query2"
+                                        }
+                                    ],
+                                    "response_format": "timeseries",
+                                    "style": {
+                                        "palette": "dog_classic",
+                                        "line_type": "solid",
+                                        "line_width": "normal"
+                                    },
+                                    "display_type": "line"
+                                }
+                            ],
+                            "yaxis": {
+                                "include_zero": false,
+                                "max": "100"
+                            },
+                            "markers": []
+                        },
+                        "layout": {
+                            "x": 4,
+                            "y": 0,
+                            "width": 4,
+                            "height": 3
+                        }
+                    },
+                    {
+                        "id": 100000000004,
+                        "definition": {
+                            "title": "Latency",
+                            "title_size": "16",
+                            "title_align": "left",
+                            "show_legend": true,
+                            "legend_layout": "horizontal",
+                            "legend_columns": [
+                                "avg",
+                                "min",
+                                "max",
+                                "value",
+                                "sum"
+                            ],
+                            "type": "timeseries",
+                            "requests": [
+                                {
+                                    "formulas": [
+                                        {
+                                            "alias": "Average",
+                                            "formula": "query1"
+                                        },
+                                        {
+                                            "alias": "P95",
+                                            "formula": "query2"
+                                        }
+                                    ],
+                                    "queries": [
+                                        {
+                                            "query": "avg:lab.gateway.latency{$team, $service, $env, $region}",
+                                            "data_source": "metrics",
+                                            "name": "query1"
+                                        },
+                                        {
+                                            "query": "p95:lab.gateway.latency{$team, $service, $env, $region}",
+                                            "data_source": "metrics",
+                                            "name": "query2"
+                                        }
+                                    ],
+                                    "response_format": "timeseries",
+                                    "style": {
+                                        "palette": "dog_classic",
+                                        "line_type": "solid",
+                                        "line_width": "normal"
+                                    },
+                                    "display_type": "line"
+                                }
+                            ],
+                            "yaxis": {
+                                "include_zero": false,
+                                "max": "auto"
+                            },
+                            "markers": []
+                        },
+                        "layout": {
+                            "x": 8,
+                            "y": 0,
+                            "width": 4,
+                            "height": 3
+                        }
+                    }
+                ]
+            },
+            "layout": {
+                "x": 0,
+                "y": 0,
+                "width": 12,
+                "height": 4
+            }
+        },
+        {
+            "id": 100000000005,
+            "definition": {
+                "title": "API Metrics",
+                "background_color": "vivid_orange",
+                "show_title": true,
+                "type": "group",
+                "layout_type": "ordered",
+                "widgets": []
+            },
+            "layout": {
+                "x": 0,
+                "y": 4,
+                "width": 12,
+                "height": 1
+            }
+        },
+        {
+            "id": 100000000006,
+            "definition": {
+                "title": "Success Rates",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "alias": "Success Rate",
+                                    "formula": "query1 / query2 * 100"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware,status_code:2*} by {api,http_method}.as_count()"
+                                },
+                                {
+                                    "name": "query2",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,http_method}.as_count()"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "line"
+                        }
+                    ],
+                    "yaxis": {
+                        "include_zero": false,
+                        "max": "100"
+                    }
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "api"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc",
+                        "compute": {
+                            "aggregation": "sum",
+                            "metric": "lab.api.request.count"
+                        }
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 5,
+                "width": 12,
+                "height": 7
+            }
+        },
+        {
+            "id": 100000000007,
+            "definition": {
+                "title": "Latencies",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "alias": "Average",
+                                    "formula": "query1"
+                                },
+                                {
+                                    "alias": "P95",
+                                    "formula": "query2"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "avg:lab.api.latency{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,http_method}"
+                                },
+                                {
+                                    "name": "query2",
+                                    "data_source": "metrics",
+                                    "query": "p95:lab.api.latency{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,http_method}"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "line"
+                        }
+                    ]
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "api"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc",
+                        "compute": {
+                            "aggregation": "sum",
+                            "metric": "lab.api.latency"
+                        }
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 38,
+                "width": 12,
+                "height": 7
+            }
+        },
+        {
+            "id": 100000000008,
+            "definition": {
+                "title": "Count",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "formula": "query1"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,status_code}.as_count()"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "bars"
+                        }
+                    ],
+                    "yaxis": {
+                        "include_zero": false,
+                        "max": "auto"
+                    }
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "api"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc",
+                        "compute": {
+                            "aggregation": "sum",
+                            "metric": "lab.api.request.count"
+                        }
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 71,
+                "width": 12,
+                "height": 7
+            }
+        },
+        {
+            "id": 100000000009,
+            "definition": {
+                "title": "API Requests by Partner",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "query_table",
+                "requests": [
+                    {
+                        "queries": [
+                            {
+                                "name": "query1",
+                                "data_source": "metrics",
+                                "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,partner}.as_count()",
+                                "aggregator": "sum"
+                            }
+                        ],
+                        "response_format": "scalar",
+                        "sort": {
+                            "order_by": [
+                                {
+                                    "type": "group",
+                                    "name": "api",
+                                    "order": "asc"
+                                }
+                            ],
+                            "count": 100
+                        },
+                        "formulas": [
+                            {
+                                "cell_display_mode": "bar",
+                                "alias": "Total",
+                                "formula": "query1"
+                            }
+                        ]
+                    }
+                ],
+                "has_search_bar": "always"
+            },
+            "layout": {
+                "x": 0,
+                "y": 104,
+                "width": 12,
+                "height": 7
+            }
+        },
+        {
+            "id": 100000000010,
+            "definition": {
+                "title": "API Requests by Client",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "query_table",
+                "requests": [
+                    {
+                        "queries": [
+                            {
+                                "name": "query1",
+                                "data_source": "metrics",
+                                "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api,client_id}.as_count()",
+                                "aggregator": "sum"
+                            }
+                        ],
+                        "response_format": "scalar",
+                        "sort": {
+                            "order_by": [
+                                {
+                                    "type": "group",
+                                    "name": "api",
+                                    "order": "asc"
+                                }
+                            ],
+                            "count": 100
+                        },
+                        "formulas": [
+                            {
+                                "cell_display_mode": "bar",
+                                "alias": "Total",
+                                "formula": "query1"
+                            }
+                        ]
+                    }
+                ],
+                "has_search_bar": "always"
+            },
+            "layout": {
+                "x": 0,
+                "y": 108,
+                "width": 12,
+                "height": 10
+            }
+        },
+        {
+            "id": 100000000011,
+            "definition": {
+                "title": "Upstream Service Metrics",
+                "background_color": "vivid_blue",
+                "show_title": true,
+                "type": "group",
+                "layout_type": "ordered",
+                "widgets": []
+            },
+            "layout": {
+                "x": 0,
+                "y": 224,
+                "width": 12,
+                "height": 1,
+                "is_column_break": true
+            }
+        },
+        {
+            "id": 100000000012,
+            "definition": {
+                "title": "Success Rates",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "formula": "query1 / query2 * 100"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.upstream.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware,status_code:2*} by {upstream_service}.as_count()"
+                                },
+                                {
+                                    "name": "query2",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.upstream.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {upstream_service}.as_count()"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "line"
+                        }
+                    ],
+                    "yaxis": {
+                        "include_zero": false,
+                        "max": "100"
+                    }
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "upstream_service"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc",
+                        "compute": {
+                            "aggregation": "sum",
+                            "metric": "lab.upstream.request.count"
+                        }
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 225,
+                "width": 12,
+                "height": 3
+            }
+        },
+        {
+            "id": 100000000013,
+            "definition": {
+                "title": "Request Counts",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "formula": "query1"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "sum:lab.upstream.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {upstream_service,status_code}.as_count()"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "bars"
+                        }
+                    ]
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "upstream_service"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc"
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 258,
+                "width": 12,
+                "height": 3
+            }
+        },
+        {
+            "id": 100000000014,
+            "definition": {
+                "title": "Latencies",
+                "title_size": "16",
+                "title_align": "left",
+                "type": "split_group",
+                "source_widget_definition": {
+                    "title": "",
+                    "title_size": "16",
+                    "title_align": "left",
+                    "type": "timeseries",
+                    "requests": [
+                        {
+                            "formulas": [
+                                {
+                                    "alias": "Average",
+                                    "number_format": {
+                                        "unit": {
+                                            "type": "canonical_unit",
+                                            "unit_name": "millisecond"
+                                        }
+                                    },
+                                    "formula": "query1"
+                                }
+                            ],
+                            "queries": [
+                                {
+                                    "name": "query1",
+                                    "data_source": "metrics",
+                                    "query": "avg:lab.upstream.latency{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {upstream_service}"
+                                }
+                            ],
+                            "response_format": "timeseries",
+                            "style": {
+                                "palette": "dog_classic",
+                                "line_type": "solid",
+                                "line_width": "normal"
+                            },
+                            "display_type": "line"
+                        }
+                    ]
+                },
+                "split_config": {
+                    "split_dimensions": [
+                        {
+                            "one_graph_per": "upstream_service"
+                        }
+                    ],
+                    "limit": 48,
+                    "sort": {
+                        "order": "desc",
+                        "compute": {
+                            "aggregation": "sum",
+                            "metric": "lab.upstream.latency"
+                        }
+                    }
+                },
+                "size": "md",
+                "has_uniform_y_axes": false
+            },
+            "layout": {
+                "x": 0,
+                "y": 291,
+                "width": 12,
+                "height": 3
+            }
+        },
+        {
+            "id": 100000000015,
+            "definition": {
+                "title": "Service Analytics",
+                "background_color": "vivid_green",
+                "show_title": true,
+                "type": "group",
+                "layout_type": "ordered",
+                "widgets": [
+                    {
+                        "id": 100000000016,
+                        "definition": {
+                            "title": "Total Service Traffic by API",
+                            "title_size": "16",
+                            "title_align": "left",
+                            "requests": [
+                                {
+                                    "queries": [
+                                        {
+                                            "name": "query1",
+                                            "data_source": "metrics",
+                                            "query": "sum:lab.api.request.count{$team,$service,$env,$region,$partner,$client_id,$model,$firmware} by {api}.as_count()",
+                                            "aggregator": "sum"
+                                        }
+                                    ],
+                                    "response_format": "scalar",
+                                    "style": {
+                                        "palette": "classic"
+                                    },
+                                    "formulas": [
+                                        {
+                                            "formula": "query1"
+                                        }
+                                    ],
+                                    "sort": {
+                                        "order_by": [
+                                            {
+                                                "type": "formula",
+                                                "index": 0,
+                                                "order": "desc"
+                                            }
+                                        ]
+                                    }
+                                }
+                            ],
+                            "type": "sunburst",
+                            "legend": {
+                                "type": "automatic"
+                            }
+                        },
+                        "layout": {
+                            "x": 0,
+                            "y": 0,
+                            "width": 4,
+                            "height": 4
+                        }
+                    }
+                ]
+            },
+            "layout": {
+                "x": 0,
+                "y": 324,
+                "width": 12,
+                "height": 5
+            }
+        }
+    ],
+    "template_variables": [
+        {
+            "name": "team",
+            "prefix": "team",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "service",
+            "prefix": "service",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "env",
+            "prefix": "env",
+            "available_values": [
+                "prod",
+                "stage",
+                "dev"
+            ],
+            "default": "prod"
+        },
+        {
+            "name": "region",
+            "prefix": "region",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "partner",
+            "prefix": "partner",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "client_id",
+            "prefix": "client_id",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "model",
+            "prefix": "model",
+            "available_values": [],
+            "default": "*"
+        },
+        {
+            "name": "firmware",
+            "prefix": "firmware",
+            "available_values": [],
+            "default": "*"
+        }
+    ],
+    "layout_type": "ordered",
+    "notify_list": [],
+    "pause_auto_refresh": false,
+    "reflow_type": "fixed",
+    "tags": []
+}

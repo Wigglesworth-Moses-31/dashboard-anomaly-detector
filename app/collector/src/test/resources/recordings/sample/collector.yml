@@ -1,0 +1,45 @@
+server:
+  port: 8101
+
+anomaly:
+  collector:
+    source: datadog                           # the only source for now (design D10)
+    datadog-site: datadoghq.com
+    dashboards:                               # dashboard ids to watch
+      - w2f-pqs-ghd                           # Lab: API platform (skeleton structure)
+      - jrp-8af-7xd                           # Swagstore: latency, requests, success rate, upstream
+    poll-interval: 15s                        # how often to ask for new data
+    step: 10s                                 # size of each data step (highest value per step)
+    backfill: 10m                             # how much history to fetch at start
+    recent-window: 2m                         # how much to fetch on each later poll
+    dashboard-refresh: 60m                    # how often to re-read dashboard definitions
+
+    # --- add-collector: everything below is read live; no code change needed (design K13) ---
+    dashboard-filters:                        # values for a dashboard's $placeholders; "*" means all
+      "[w2f-pqs-ghd]":
+        env: prod
+      "[jrp-8af-7xd]":
+        env: tsreenv
+    classification:                           # kind and unit; first match wins; then Datadog metadata
+      - match: { metric: "lab.*.latency" }
+        set: { kind: latency, unit: ms }
+      - match: { metric: "lab.*.request.count" }
+        set: { kind: count, unit: requests }
+      - match: { metric: "lab.http.requests" }
+        set: { kind: count, unit: requests }
+      - match: { metric: "lab.cpu.percent" }
+        set: { kind: gauge, unit: percent }
+      - match: { has-formula: true, panel-title: "*Success Rate*" }
+        set: { kind: ratio, unit: percent }
+    max-concurrent-requests: 8                # bulkhead: calls to Datadog at the same time
+    rate-limit-share: 0.8                     # use 80% of the limit Datadog reports
+    retries: 3
+    retry-base: 500ms                         # waits grow 0.5s, 1s, 2s... (random, capped)
+    retry-cap: 8s
+    breaker-failures: 5                       # a panel failing 5 times in a row is paused...
+    breaker-open: 5m                          # ...for 5 minutes, then tried once
+    metadata-ttl: 24h                         # how long Datadog's type/unit of a metric is trusted
+    metadata-cache-size: 10000
+    recording:
+      enabled: true                           # save every answer to files (for replay tests)
+      dir: recordings

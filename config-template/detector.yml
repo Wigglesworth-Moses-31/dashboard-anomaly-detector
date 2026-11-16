@@ -1,0 +1,94 @@
+server:
+  port: 8103
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:55432/anomaly?reWriteBatchedInserts=true
+    username: anomaly
+    password: ${PLATFORM_DB_PASSWORD}       # from the environment (scripts/system.sh), never written here
+  flyway:
+    schemas: incidents                      # tables and Flyway's own history live in schema incidents
+    create-schemas: false                   # the schema is made by platform/init-db
+
+anomaly:
+  detector:
+    history: 30m                            # window for "normal" (at most 2d: the Store keeps no more)
+    min-history: 10m                        # judge a line only after it has been known this long
+    calm-period: 2m                         # all lines calm this long before an incident closes
+    silence-after: 1m                       # no value this long behind the rest of its dashboard = silent
+    silence-min-presence: 0.9               # only lines with a value in 9 of 10 steps can go silent
+    silence-skip-signals: [errors, error-rate]   # an error line that stops reporting is good news
+    group-by: [api, upstream_service, peer.rpc.service, service, resource_name]   # first tag a line has; else its dashboard
+    upstream-tags: [upstream_service, peer.rpc.service]
+    incident-retention: 2d                  # closed incidents kept (at most 7d)
+    store-address: localhost:9102           # the Store's gRPC (history for a warm start)
+
+    # First match wins: put narrow rules (rates, errors) before broad ones (traffic).
+    # Patterns ignore case; * is a wildcard. Tags: key=pattern, or key!=pattern.
+    rules:
+      - signal: success-rate                # percentages: judged in points, a fall is bad
+        match:
+          title: ["*success rate*"]
+          query: ["*1 - err*"]              # "Calls between services": 100 * (1 - errs / hits)
+        direction: down
+        points: 5
+        mad-factor: 3                       # and 3 x the line's usual wobble: few requests = noisy percentages
+        steps: 3                            # 30 s: a chance dip on a low-traffic API rarely lasts 3 steps
+      - signal: error-rate
+        match:
+          title: ["*error*rate*"]           # "Server error (5xx) rate % per service"
+        direction: up
+        points: 5
+        mad-factor: 3
+        steps: 3
+      - signal: errors                      # before traffic: an error count is also a request count
+        match:
+          tags: ["status_code=4*", "status_code=5*", "http.status_code=4*", "http.status_code=5*", "rpc.grpc.status_code!=0"]
+          metric: ["*.errors"]
+        direction: up
+        factor: 3
+        min-change: 3                       # 26% of ~15 requests a step is ~4 errors; normal error codes stay near 0
+        steps: 2
+      - signal: latency                     # "Slowest calls (p95, ms)" divides seconds by 1000: tiny numbers
+        match:
+          title: ["*slowest*"]
+        direction: up
+        factor: 3
+        min-change: 0.00005
+        steps: 2
+      - signal: latency                     # lab.* latencies, in milliseconds
+        match:
+          unit: ["ms", "millisecond"]
+        direction: up
+        factor: 3
+        min-change: 50
+        steps: 2
+      - signal: latency                     # trace.* latencies, in seconds
+        match:
+          kind: ["latency"]
+          metric: ["*latency*"]
+        direction: up
+        factor: 3
+        min-change: 0.05
+        steps: 2
+      - signal: saturation
+        match:
+          metric: ["*cpu*", "*memory*"]
+        direction: up
+        points: 20
+        steps: 3
+      - signal: traffic                     # requests, hits and calls: a flood or a drop
+        match:
+          kind: ["count"]
+          metric: ["*count*", "*hits*", "*requests*"]
+        direction: both
+        factor: 3
+        min-change: 5
+        mad-factor: 3                       # small counts swing by chance
+        steps: 2
+    general:                                # anything no rule matches
+      direction: both
+      mad-factor: 6                         # more than 6 x the line's usual wobble away from normal...
+      at-least-factor: 2                    # ...and at least twice or half normal
+      min-change: 1
+      steps: 3

@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  Personal resume project: a system that watches 10-15 Datadog dashboards, catches short metric spikes
+  within seconds, alerts live in a web page, and writes a daily Markdown report. Built in this lab on a
+  personal Datadog trial; meant to be reused at the user's organisation later, so keep it vendor-neutral
+  where cheap (the data source sits behind one interface).
+  Scope: Datadog metrics only. No APM trace pulling (retention too low). No Grafana/Prometheus for now.
+  Stack: Java 26 (virtual threads), Kafka, gRPC, RSocket, Protobuf, a time-series database, Postgres.
+  All settings live outside the code (YAML in Git, served by a Config Service); a settings change must
+  never require a code change.
+  Datadog keys are in .env and must never appear in any artifact, log or commit.
+  The user is learning these technologies: write in plain, simple language, explain the "why" of every
+  choice, use short sections and tables, and avoid unexplained jargon.
+
+rules:
+  proposal:
+    - State what is out of scope
+    - Explain each choice in one plain sentence a beginner can follow
+  design:
+    - Include a "Why this and not the alternative" note for each major decision
+    - Include a section on data structures, algorithms and design patterns used, each tied to the real problem it solves, with its Big-O cost
+    - Do not add a data structure or pattern that does not solve a problem in this change
+  tasks:
+    - Keep each task small enough to finish and review in one sitting
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+# Example:
+#   context: |
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

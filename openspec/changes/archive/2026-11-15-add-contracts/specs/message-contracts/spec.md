@@ -1,0 +1,95 @@
+# Spec Delta
+
+## Purpose
+
+Defines, in one shared place, every message the services exchange, how each metric line is identified, and
+the rules that let messages change over time without breaking the services that read them.
+
+## ADDED Requirements
+
+### Requirement: One shared definition per message
+Every message exchanged between services, and every question asked of the Store, SHALL be defined once in the
+shared contracts. No service SHALL define its own copy of a message.
+
+#### Scenario: Building the services
+- **WHEN** all services are built
+- **THEN** every message type they send or receive comes from the shared contracts module
+
+### Requirement: Stable identity for each metric line
+Each metric line SHALL have an id computed from its source, its query and its tags. The same line SHALL get
+the same id every time, whatever order its tags arrive in; lines differing in any of these SHALL get
+different ids.
+
+#### Scenario: Tags in a different order
+- **GIVEN** a line with tags `api=/v1/invoices` and `status_code=500`
+- **WHEN** the same line arrives with the tags listed the other way round
+- **THEN** both get the same id
+
+#### Scenario: Different status code
+- **WHEN** two lines differ only in `status_code` (500 and 200)
+- **THEN** they get different ids
+
+### Requirement: Times and missing data are unambiguous
+All times SHALL be milliseconds since 1 January 1970 in UTC. A step with no data SHALL be left out of the
+message, never sent as zero.
+
+#### Scenario: A gap in the data
+- **WHEN** a metric has no value for the step at 14:05:10
+- **THEN** the message has no point for 14:05:10, rather than a point with value 0
+
+### Requirement: Unfinished steps are marked
+A data point whose step had not ended when it was collected SHALL be marked partial.
+
+#### Scenario: Newest step
+- **WHEN** a poll at 14:05:15 returns the step 14:05:10 to 14:05:20
+- **THEN** that point is marked partial
+
+### Requirement: Messages can grow without breaking readers
+A reader SHALL accept a message that has fields it does not know, and ignore them. A field SHALL never be
+renamed, removed or given another meaning in a way that changes how older messages are read; the build SHALL
+fail if a contract change would do so.
+
+#### Scenario: Newer sender, older reader
+- **GIVEN** a newer sender that adds a field to `MetricPoints`
+- **WHEN** an older reader receives that message
+- **THEN** it reads every field it knows correctly and ignores the new one
+
+#### Scenario: Unsafe contract edit
+- **WHEN** someone changes an existing field's number or type in a contract
+- **THEN** the build fails and names the field
+
+### Requirement: Messages are checked before use
+The shared contracts SHALL provide a check that tells a reader whether a received message is complete
+(for example: a series id is present, points are in time order). A message that fails SHALL be reported with
+the reason instead of being used.
+
+#### Scenario: Points without a series id
+- **WHEN** a `MetricPoints` message arrives with no series id
+- **THEN** the check rejects it and says the series id is missing
+
+### Requirement: Incident events are self-contained and unique
+Each incident event SHALL carry the incident's full current state and an event id that no other event shares,
+so a reader can show the incident from that one event and can recognise a repeated delivery.
+
+#### Scenario: Viewer joins late
+- **WHEN** a viewer receives only the latest event of an incident
+- **THEN** it can show the incident's state, lines involved and peaks without any earlier event
+
+#### Scenario: Same event delivered twice
+- **WHEN** the same event arrives twice
+- **THEN** both copies have the same event id
+
+### Requirement: Order is kept per metric line and per incident
+Messages about the same metric line SHALL travel with that line's id as their key, and incident events with
+the incident's id, so their order is kept.
+
+#### Scenario: Two polls of the same line
+- **WHEN** two `MetricPoints` messages for the same line are sent one after the other
+- **THEN** they carry the same key, and a reader receives them in the order they were sent
+
+### Requirement: The web page gets readable messages
+Messages sent to the web page SHALL be JSON with the same fields and meaning as the shared contract.
+
+#### Scenario: Incident shown in the browser
+- **WHEN** the Notifier sends an incident event to the web page
+- **THEN** the browser receives JSON whose field names match the contract

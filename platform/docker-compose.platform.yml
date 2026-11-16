@@ -1,0 +1,56 @@
+# Local platform for the anomaly-detection system: Kafka and TimescaleDB.
+# Start:  docker compose --env-file ../.env -p anomaly-platform -f docker-compose.platform.yml up -d
+# Ports are unusual on purpose so they never clash with other containers on this Mac (design D12).
+services:
+  kafka:
+    image: apache/kafka:4.3.2
+    container_name: anomaly-kafka
+    ports:
+      - "59092:59092"            # for services running on the Mac
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller          # one node does both jobs (KRaft, no ZooKeeper)
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:59092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:59092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"        # topics are created on purpose (create-topics.sh)
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"            # keep memory small on the Mac
+      KAFKA_LOG_DIRS: /var/lib/kafka/data             # keep topics in the named volume (the image default is /tmp)
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    restart: unless-stopped
+
+  timescaledb:
+    image: timescale/timescaledb:2.32.0-pg17
+    container_name: anomaly-timescaledb
+    ports:
+      - "55432:5432"
+    environment:
+      POSTGRES_DB: anomaly
+      POSTGRES_USER: anomaly
+      POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD:?set PLATFORM_DB_PASSWORD in .env}
+      TS_TUNE_MEMORY: 512MB                           # small memory footprint for the lab
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro      # runs once, on the first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anomaly -d anomaly"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+  timescale-data:

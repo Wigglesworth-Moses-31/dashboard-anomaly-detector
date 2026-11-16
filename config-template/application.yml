@@ -1,0 +1,22 @@
+# Shared by every service.
+spring:
+  kafka:
+    bootstrap-servers: localhost:59092      # platform Kafka (docs/platform.md)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,settings,info
+  endpoint:
+    health:
+      show-details: always
+      status:
+        order: DOWN, OUT_OF_SERVICE, DEGRADED, UP, UNKNOWN
+        http-mapping:
+          DEGRADED: 200                       # degraded means "running on the last good settings"
+
+anomaly:
+  shared:
+    time-zone: __TIME_ZONE__                  # what "today" means for the page and the reports (setup fills it)
+    environment: lab

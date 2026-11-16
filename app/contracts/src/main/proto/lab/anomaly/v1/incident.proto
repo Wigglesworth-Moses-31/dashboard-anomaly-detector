@@ -1,0 +1,62 @@
+// Incident opened, updated or closed (design C2, C4). Each event carries the incident's full current state.
+// Kafka topic incident-events, key = incident_id.
+syntax = "proto3";
+
+package lab.anomaly.v1;
+
+option java_package = "lab.anomaly.contracts.v1";
+option java_multiple_files = true;
+option java_outer_classname = "IncidentProto";
+
+message IncidentEvent {
+  string event_id = 1;                  // unique per event (UUID): lets readers spot a duplicate delivery
+  string incident_id = 2;
+  int64 sequence = 3;                   // 1, 2, 3... per incident: readers keep only the highest seen
+  EventType type = 4;
+  int64 occurred_ms = 5;                // UTC milliseconds
+  Incident incident = 6;                // full current state after this event
+}
+
+message Incident {
+  string incident_id = 1;
+  IncidentState state = 2;
+  string title = 3;                     // e.g. "billing-core: errors and latency"
+  int64 started_ms = 4;
+  int64 ended_ms = 5;                   // 0 while open
+  repeated AffectedSeries series = 6;
+  repeated Link links = 7;              // dashboards at the incident's time window
+  string group_key = 8;                 // added in add-detector: e.g. "api=/v1/invoices" or "dashboard=w2f-pqs-ghd"
+  bool upstream = 9;                    // the group is an upstream service (a service being called)
+}
+
+message AffectedSeries {
+  string series_id = 1;
+  string metric = 2;
+  map<string, string> group_tags = 3;
+  double peak_value = 4;
+  int64 peak_ts_ms = 5;
+  double normal_value = 6;              // what was normal just before the spike
+  string unit = 7;
+  string signal = 8;                    // added in add-detector: errors, traffic, success-rate, error-rate, latency, saturation, general
+  string reason = 9;                    // "up", "down" or "silent"
+  string dashboard_title = 10;
+  string panel_title = 11;
+}
+
+message Link {
+  string label = 1;
+  string url = 2;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_OPENED = 1;
+  EVENT_TYPE_UPDATED = 2;
+  EVENT_TYPE_CLOSED = 3;
+}
+
+enum IncidentState {
+  INCIDENT_STATE_UNSPECIFIED = 0;
+  INCIDENT_STATE_OPEN = 1;
+  INCIDENT_STATE_CLOSED = 2;
+}

@@ -1,0 +1,15 @@
+server:
+  port: 8104                                  # the page: http://localhost:8104 (and the health page)
+
+spring:
+  rsocket:
+    server:
+      port: ${anomaly.notifier.rsocket-port}   # one place to set it: anomaly.notifier.rsocket-port
+      transport: websocket
+
+anomaly:
+  notifier:
+    rsocket-port: 7104                        # the page connects here (RSocket over WebSocket)
+    day-by: started                           # started | received (received: demos of older recordings show as today)
+    max-queued-updates-per-viewer: 2000       # a slow page gets the latest state per incident, at most this many
+# The time zone ("today", and the times on the page) is shared with the Reporter: application.yml anomaly.shared.time-zone

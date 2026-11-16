@@ -1,0 +1,21 @@
+// The newest numbers of one metric line (design C1, C2). Sent on every poll.
+// Kafka topic metric-points, key = series_id (keeps each line's messages in order).
+syntax = "proto3";
+
+package lab.anomaly.v1;
+
+option java_package = "lab.anomaly.contracts.v1";
+option java_multiple_files = true;
+option java_outer_classname = "MetricPointsProto";
+
+message MetricPoints {
+  string series_id = 1;
+  int64 collected_ms = 2;               // when the Collector received them, UTC milliseconds
+  repeated Point points = 3;            // oldest first; a step with no data is left out, never sent as 0
+}
+
+message Point {
+  int64 ts_ms = 1;                      // start of the step, UTC milliseconds
+  double value = 2;
+  bool partial = 3;                     // the step had not ended when collected; a later poll sends it complete
+}
