@@ -29,6 +29,90 @@ public final class FilterFiller {
         return values;
     }
 
+    /**
+     * Fills with several values per variable (add-dashboard-json design J11). When no variable of a filter has more
+     * than one value the result is exactly {@link #fill(String, List, Map)}'s, so existing questions and line ids stay
+     * the same; otherwise that filter is written in Datadog's boolean form: {@code prefix IN (a,b)}, {@code NOT tag},
+     * items joined with {@code AND}. O(length of the query).
+     */
+    public static String fillMulti(String query, List<TemplateVariable> variables, Map<String, List<String>> values) {
+        Map<String, String> single = new java.util.HashMap<>();
+        boolean multi = false;
+        for (Map.Entry<String, List<String>> e : values.entrySet()) {
+            List<String> v = e.getValue();
+            boolean all = v == null || v.isEmpty() || v.contains("*");
+            single.put(e.getKey(), all ? "*" : v.get(0));
+            multi |= !all && v.size() > 1;
+        }
+        if (!multi) {
+            return fill(query, variables, single);
+        }
+        Map<String, String> prefixes = new java.util.HashMap<>();
+        variables.forEach(v -> prefixes.put(v.name(), v.prefix() == null || v.prefix().isBlank() ? v.name() : v.prefix()));
+        StringBuilder out = new StringBuilder();
+        Matcher braces = BRACES.matcher(query);
+        int last = 0;
+        while (braces.find()) {
+            out.append(query, last, braces.start());
+            String before = query.substring(0, braces.start()).stripTrailing();
+            boolean groupBy = before.endsWith(" by") || before.equals("by");
+            String inner = braces.group(1);
+            out.append('{').append(groupBy ? inner
+                    : usesMulti(inner, prefixes, values) ? booleanItems(inner, prefixes, values) : fillItems(inner, prefixes, single)).append('}');
+            last = braces.end();
+        }
+        out.append(query.substring(last));
+        return out.toString();
+    }
+
+    private static boolean usesMulti(String filter, Map<String, String> prefixes, Map<String, List<String>> values) {
+        Matcher m = PLACEHOLDER.matcher(filter);
+        while (m.find()) {
+            List<String> v = values.get(m.group(1));
+            if (prefixes.containsKey(m.group(1)) && v != null && v.size() > 1 && !v.contains("*")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String term(String prefix, List<String> v) {
+        return v.size() == 1 ? prefix + ":" + v.get(0) : prefix + " IN (" + String.join(",", v) + ")";
+    }
+
+    private static String booleanItems(String filter, Map<String, String> prefixes, Map<String, List<String>> values) {
+        List<String> kept = new ArrayList<>();
+        for (String raw : filter.split(",")) {
+            String item = raw.strip();
+            if (item.isEmpty()) {
+                continue;
+            }
+            Matcher whole = PLACEHOLDER.matcher(item);
+            if (whole.matches() && prefixes.containsKey(whole.group(1))) {
+                List<String> v = values.getOrDefault(whole.group(1), List.of("*"));
+                if (!v.isEmpty() && !v.contains("*")) {
+                    kept.add(term(prefixes.get(whole.group(1)), v));
+                }
+                continue;
+            }
+            if (item.startsWith("!")) {
+                kept.add("NOT " + item.substring(1));
+                continue;
+            }
+            Matcher inside = PLACEHOLDER.matcher(item);
+            StringBuilder replaced = new StringBuilder();
+            while (inside.find()) {
+                String name = inside.group(1);
+                List<String> v = values.getOrDefault(name, List.of("*"));
+                String replacement = prefixes.containsKey(name) && !v.contains("*") ? term(prefixes.get(name), v) : inside.group();
+                inside.appendReplacement(replaced, Matcher.quoteReplacement(replacement));
+            }
+            inside.appendTail(replaced);
+            kept.add(replaced.toString());
+        }
+        return kept.isEmpty() ? "*" : String.join(" AND ", kept);
+    }
+
     public static String fill(String query, List<TemplateVariable> variables, Map<String, String> values) {
         Map<String, String> prefixes = new java.util.HashMap<>();
         variables.forEach(v -> prefixes.put(v.name(), v.prefix() == null || v.prefix().isBlank() ? v.name() : v.prefix()));

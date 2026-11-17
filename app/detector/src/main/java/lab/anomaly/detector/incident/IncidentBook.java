@@ -40,6 +40,7 @@ public final class IncidentBook {
     private long calmMs = 120_000;
     private List<String> groupBy = List.of();
     private Set<String> upstreamTags = Set.of();
+    private final Set<String> sitesSeen = new java.util.HashSet<>();     // add-multi-site design M9
 
     public IncidentBook(Supplier<String> ids) {
         this.ids = ids;
@@ -53,20 +54,38 @@ public final class IncidentBook {
 
     // ---- grouping ---------------------------------------------------------------------------------------------
 
-    /** The group a line belongs to: the first tag of the grouping list it has, else its dashboard. */
-    public record Group(String key, String label, boolean upstream, boolean byDashboard) {
+    /**
+     * The group a line belongs to: the first tag of the grouping list it has, else its dashboard. The key starts with
+     * the line's site (add-multi-site design M9), so the same API in two regions is two incidents, never one.
+     */
+    public record Group(String key, String label, boolean upstream, boolean byDashboard, String site) {
+        public Group(String key, String label, boolean upstream, boolean byDashboard) {
+            this(key, label, upstream, byDashboard, "");
+        }
     }
 
     public Group groupOf(LineFacts line) {
+        String site = line.site() == null ? "" : line.site();
+        sitesSeen.add(site);                                                 // O(1); a handful of sites at most
         for (String tag : groupBy) {
             String value = line.tags().get(tag);
             if (value != null && !value.isBlank() && !value.equalsIgnoreCase("N/A")) {
-                return new Group(tag + "=" + value, value, upstreamTags.contains(tag), false);
+                return new Group(site + "|" + tag + "=" + value, value, upstreamTags.contains(tag), false, site);
             }
         }
         View v = line.primaryView();
         String title = v.getViewTitle().isBlank() ? v.getViewId() : v.getViewTitle();
-        return new Group("dashboard=" + v.getViewId(), title, false, true);
+        return new Group(site + "|dashboard=" + v.getViewId(), title, false, true, site);
+    }
+
+    /** Remembers a watched line's site. O(1). */
+    public void noteSite(String site) {
+        sitesSeen.add(site == null ? "" : site);
+    }
+
+    /** True once lines from two or more sites were seen: titles then start with the site's label ("EU · ..."). */
+    public boolean multiSite() {
+        return sitesSeen.size() > 1;
     }
 
     // ---- events from lines ------------------------------------------------------------------------------------
@@ -100,7 +119,7 @@ public final class IncidentBook {
                 open.members.values().forEach(x -> bySeries.put(x.seriesId, closed));
                 reopened = true;
             } else {
-                open = new Open(ids.get(), group, line.spikeStart());
+                open = new Open(ids.get(), group, line.spikeStart(), this::multiSite);
                 opened = true;
             }
             byGroup.put(group.key(), open);
@@ -193,9 +212,15 @@ public final class IncidentBook {
 
     /** Loads open incidents saved before a restart, with their last sequence numbers (design D7). */
     public void restore(Incident incident, long sequence) {
-        Group group = new Group(incident.getGroupKey(), labelOf(incident), incident.getUpstream(),
-                incident.getGroupKey().startsWith("dashboard="));
-        Open open = new Open(incident.getIncidentId(), group, incident.getStartedMs());
+        String key = incident.getGroupKey();
+        int bar = key.indexOf('|');
+        String site = bar >= 0 ? key.substring(0, bar) : "";                 // keys saved before add-multi-site have none
+        Group group = new Group(key, labelOf(incident), incident.getUpstream(),
+                key.substring(bar + 1).startsWith("dashboard="), site);
+        if (!site.isEmpty()) {
+            sitesSeen.add(site);
+        }
+        Open open = new Open(incident.getIncidentId(), group, incident.getStartedMs(), this::multiSite);
         open.sequence = sequence;
         open.lastUpdateTs = incident.getStartedMs();
         for (Link link : incident.getLinksList()) {
@@ -211,6 +236,7 @@ public final class IncidentBook {
 
     private static String labelOf(Incident incident) {
         String key = incident.getGroupKey();
+        key = key.substring(key.indexOf('|') + 1);
         int eq = key.indexOf('=');
         if (key.startsWith("dashboard=") && !incident.getLinksList().isEmpty()) {
             return incident.getLinks(0).getLabel();
@@ -296,10 +322,13 @@ public final class IncidentBook {
         long endedMs;
         boolean dirty;
 
-        Open(String id, Group group, long startedMs) {
+        final java.util.function.BooleanSupplier multiSite;
+
+        Open(String id, Group group, long startedMs, java.util.function.BooleanSupplier multiSite) {
             this.id = id;
             this.group = group;
             this.startedMs = startedMs;
+            this.multiSite = multiSite;
         }
 
         void addLink(LineFacts f) {
@@ -326,6 +355,9 @@ public final class IncidentBook {
                 String url = f.dashboardUrl(viewId, startedMs - LINK_MARGIN_MS, to);
                 if (!url.isEmpty()) {
                     String label = f.primaryView().getViewTitle().isBlank() ? viewId : f.primaryView().getViewTitle();
+                    if (multiSite.getAsBoolean() && f.site() != null && !f.site().isBlank()) {
+                        label = lab.anomaly.contracts.Sites.label(f.site()) + " · " + label;     // "EU · Shop" (M9)
+                    }
                     all.put(label, Link.newBuilder().setLabel(label).setUrl(url).build());
                 }
             });
@@ -339,7 +371,9 @@ public final class IncidentBook {
             for (Member m : members.values()) {
                 parts.add(m.signal.replace('-', ' ') + " " + m.reason);
             }
-            return (group.upstream() ? "upstream " : "") + group.label() + ": " + String.join(", ", parts);
+            String site = multiSite.getAsBoolean() && !group.site().isEmpty()
+                    ? lab.anomaly.contracts.Sites.label(group.site()) + " · " : "";
+            return site + (group.upstream() ? "upstream " : "") + group.label() + ": " + String.join(", ", parts);
         }
     }
 }

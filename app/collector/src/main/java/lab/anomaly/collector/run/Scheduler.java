@@ -22,6 +22,7 @@ public final class Scheduler {
     private final Map<String, Long> nextDue = new HashMap<>();
     private final Set<String> running = new HashSet<>();
     private long intervalMs;
+    private final Map<String, Long> keyInterval = new HashMap<>();     // per-unit interval (budget guard, J13)
     private long skipped;
 
     public Scheduler(long intervalMs) {
@@ -32,6 +33,7 @@ public final class Scheduler {
     public void setUnits(List<String> keys, long nowMs) {
         Set<String> wanted = new HashSet<>(keys);
         nextDue.keySet().retainAll(wanted);
+        keyInterval.keySet().retainAll(wanted);
         for (String key : keys) {
             nextDue.computeIfAbsent(key, k -> nowMs + Math.floorMod(spread(k), intervalMs));
         }
@@ -44,16 +46,30 @@ public final class Scheduler {
 
     /** Units due at {@code nowMs}, marked running and rescheduled one interval later. */
     public List<String> takeDue(long nowMs) {
+        return takeDue(nowMs, 0);
+    }
+
+    /**
+     * Units due by {@code nowMs + lookaheadMs}: taking units due in the next moment together lets them share one
+     * Datadog call (batching, add-dashboard-json design J14); they are at most {@code lookaheadMs} early.
+     */
+    public List<String> takeDue(long nowMs, long lookaheadMs) {
         List<String> due = new ArrayList<>();
-        while (!queue.isEmpty() && queue.peek().atMs() <= nowMs) {
+        // Only when the earliest unit is really due: then everything due in the next lookahead goes with it. Taking
+        // early units on every pass instead made batches of one or two (found live: 122 calls for 146 polls).
+        if (queue.isEmpty() || queue.peek().atMs() > nowMs) {
+            return due;
+        }
+        while (!queue.isEmpty() && queue.peek().atMs() <= nowMs + lookaheadMs) {
             Due next = queue.poll();
             Long current = nextDue.get(next.key());
             if (current == null || current != next.atMs()) {
                 continue;                                         // stale entry from a previous plan or timing
             }
-            long following = next.atMs() + intervalMs;
+            long every = keyInterval.getOrDefault(next.key(), intervalMs);
+            long following = next.atMs() + every;
             if (following <= nowMs) {                             // fell behind (e.g. machine asleep): skip ahead
-                following = nowMs + intervalMs;
+                following = nowMs + every;
             }
             nextDue.put(next.key(), following);
             queue.add(new Due(following, next.key()));
@@ -65,6 +81,17 @@ public final class Scheduler {
             due.add(next.key());
         }
         return due;
+    }
+
+    /** Gives these units their own interval (0 or less: back to the shared one). Takes effect from their next turn. */
+    public void setInterval(java.util.Collection<String> keys, long everyMs) {
+        for (String key : keys) {
+            if (everyMs > 0 && everyMs != intervalMs) {
+                keyInterval.put(key, everyMs);
+            } else {
+                keyInterval.remove(key);
+            }
+        }
     }
 
     public void finished(String key) {

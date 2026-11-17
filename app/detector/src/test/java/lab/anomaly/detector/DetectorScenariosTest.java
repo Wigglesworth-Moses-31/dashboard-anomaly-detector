@@ -389,7 +389,7 @@ class DetectorScenariosTest {
         Incident last = changes.get(changes.size() - 1).incident();
         assertThat(last.getTitle()).isEqualTo("/v1/invoices: latency up, errors up, success rate down");
         assertThat(last.getSeriesCount()).isEqualTo(3);
-        assertThat(last.getGroupKey()).isEqualTo("api=/v1/invoices");
+        assertThat(last.getGroupKey()).isEqualTo("datadoghq.com|api=/v1/invoices");   // site first (add-multi-site M9)
     }
 
     @Test
@@ -408,7 +408,7 @@ class DetectorScenariosTest {
             t += STEP;
         }
         assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getGroupKey())
-                .containsExactlyInAnyOrder("api=/v1/invoices", "api=/v1/orders");
+                .containsExactlyInAnyOrder("datadoghq.com|api=/v1/invoices", "datadoghq.com|api=/v1/orders");
     }
 
     @Test
@@ -497,5 +497,50 @@ class DetectorScenariosTest {
             assertThat(c.incident().getIncidentId()).isEqualTo(opened.incident().getIncidentId());
             assertThat(c.sequence()).isEqualTo(opened.sequence() + 1);
         });
+    }
+
+    // ---- add-multi-site (design M9) ---------------------------------------------------------------------------
+
+    private static SeriesDescriptor onSite(SeriesDescriptor d, String site) {
+        return d.toBuilder().setSource(d.getSource().toBuilder().setInstance(site)).build();
+    }
+
+    @Test
+    void sameApiInTwoRegionsIsTwoIncidentsNamedBySite() {
+        SeriesDescriptor us = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor eu = add(onSite(latency("eeee000000000001", "/v1/invoices"), "datadoghq.eu"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(us, t, 138);
+            value(eu, t, 140);
+            t += STEP;
+        }
+        for (int i = 0; i < 2; i++) {
+            value(us, t, 1213);
+            value(eu, t, 1300);
+            t += STEP;
+        }
+        List<Incident> opened = of(EventType.EVENT_TYPE_OPENED).stream().map(Change::incident).toList();
+        assertThat(opened).extracting(Incident::getTitle)
+                .containsExactlyInAnyOrder("US1 · /v1/invoices: latency up", "EU · /v1/invoices: latency up");
+        assertThat(opened).extracting(Incident::getGroupKey)
+                .containsExactlyInAnyOrder("datadoghq.com|api=/v1/invoices", "datadoghq.eu|api=/v1/invoices");
+        Incident euIncident = opened.stream().filter(i -> i.getTitle().startsWith("EU")).findFirst().orElseThrow();
+        assertThat(euIncident.getLinksList()).isNotEmpty()
+                .allMatch(l -> l.getUrl().startsWith("https://app.datadoghq.eu/dashboard/"));
+    }
+
+    @Test
+    void oneSiteKeepsTitlesAsBefore() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(inv, t, 138);
+            t += STEP;
+        }
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1213);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getTitle())
+                .containsExactly("/v1/invoices: latency up");
     }
 }

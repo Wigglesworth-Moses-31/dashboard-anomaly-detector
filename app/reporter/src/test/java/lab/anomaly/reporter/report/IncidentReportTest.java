@@ -96,4 +96,27 @@ class IncidentReportTest {
         assertThat(Completion.verify(md.replace("1,569 ms", "1,570 ms"))).as("changed").isEqualTo(-1);
         assertThat(Completion.verify(md.substring(0, md.length() / 2))).as("truncated").isEqualTo(-1);
     }
+
+    // ---- add-multi-site task 5.1 ------------------------------------------------------------------------------
+
+    private static lab.anomaly.contracts.v1.SeriesDescriptor on(lab.anomaly.contracts.v1.SeriesDescriptor d, String site) {
+        return d.toBuilder().setSource(lab.anomaly.contracts.v1.Source.newBuilder().setSystem("datadog").setInstance(site)).build();
+    }
+
+    @Test
+    void twoSitesAreNamedInTheTables() {
+        List<SeriesSummary> sums = List.of(summary("l1", 8640, 900, 100), summary("u1", 10, 1, 1), summary("u2", 10, 1, 1));
+        String md = new IncidentReport().render(new ReportData(DAY, List.of(), null, sums,
+                List.of(on(descriptor("l1", Kind.KIND_LATENCY, "Latencies"), "datadoghq.eu"),
+                        on(descriptor("u1", Kind.KIND_UNKNOWN, "Rate"), "datadoghq.com"),
+                        on(descriptor("u2", Kind.KIND_UNKNOWN, "Rate"), "datadoghq.eu")), 10_000));
+        assertThat(md).contains("| EU · Latencies |");
+        assertThat(md).contains("| US1 · Swagstore / Rate | 1 |").contains("| EU · Swagstore / Rate | 1 |");
+    }
+
+    @Test
+    void oneSiteKeepsTheTablesAsBefore() {
+        String md = render(incidents(), null);
+        assertThat(md).doesNotContain("US1 · ").contains("| Swagstore / Success rate % per service | 2 |");
+    }
 }

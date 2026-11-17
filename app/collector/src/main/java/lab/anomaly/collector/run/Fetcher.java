@@ -113,4 +113,16 @@ public final class Fetcher {
     public int inFlight(int maxConcurrent) {
         return maxConcurrent - bulkhead.availablePermits();
     }
+
+    /**
+     * Requests per second this source allows us (add-multi-site design M8): the limit it last reported times our
+     * share, divided by its period; 300 per 10 s (measured) until it reports. O(1).
+     */
+    public double allowedPerSecond() {
+        TimeseriesAnswer.RateLimitStatus limit = lastLimit;
+        if (limit == null || limit.limit() == null || limit.periodSeconds() == null || limit.periodSeconds() <= 0) {
+            return 300 * share / 10.0;
+        }
+        return limit.limit() * share / limit.periodSeconds();
+    }
 }

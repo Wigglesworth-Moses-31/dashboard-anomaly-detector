@@ -1,6 +1,6 @@
 # Settings (config-repo)
 
-`scripts/setup.sh` copies this folder to `config-repo/`, fills in your Datadog site, dashboards and time zone, and makes
+`scripts/setup.sh` copies this folder to `config-repo/`, fills in your Datadog sources (site, key names, dashboards) and time zone, and makes
 it its own Git repository. The Config Service reads the **committed** version of those files and hands each service
 its settings: nothing is fixed in code.
 
@@ -22,3 +22,6 @@ git commit -am "watch one more dashboard"
 A post-commit hook asks the Config Service to broadcast the change; every running service has it within seconds.
 A change that breaks a rule (for example a 48-hour report window) is refused and the old value stays; the service's
 `/actuator/settings` page says why.
+
+`dashboards/` holds the exported dashboard JSON files, one folder per source. Edit a file (for example a variable's
+`default`) or replace it with a new export, check it with `scripts/check-dashboards.sh`, then commit.

@@ -50,3 +50,38 @@ of each service, and SHALL NOT appear in logs, reports or messages.
 #### Scenario: Startup log
 - **WHEN** the Collector starts and logs its settings
 - **THEN** the log shows that keys are present, but never their values
+
+### Requirement: Settings name secrets, and only allowed ones
+Settings MAY name the environment variable that holds a secret, never hold the secret itself. A Datadog key name
+SHALL match `DD_<NAME>_API_KEY` or `DD_<NAME>_APP_KEY` (or the original `DD_API_KEY` and `DD_APP_KEY`); any other
+name SHALL be refused, so that settings can never make a service read an unrelated secret.
+
+#### Scenario: Allowed key name
+- **WHEN** a source names `DD_EU_API_KEY` and `DD_EU_APP_KEY`
+- **THEN** the settings are accepted and the Collector reads those two variables
+
+#### Scenario: Pointing at another secret
+- **WHEN** a source names `PLATFORM_DB_PASSWORD` as its API key
+- **THEN** the settings are refused, the old settings stay, and the settings page says the name is not allowed
+
+#### Scenario: Only Datadog keys reach the Collector
+- **WHEN** the system is started with `.env` holding keys for `us` and `eu` and the database password
+- **THEN** the Collector's environment holds the four Datadog keys and not the database password
+
+### Requirement: Dashboard files are settings
+Dashboard JSON files SHALL live in the settings repository, be served by the Config Service like other settings,
+be checked before use and apply without a restart. A file that is not valid JSON, holds no widgets, or whose
+`filters` name a variable the dashboard does not have SHALL be refused, keeping the previous version.
+
+#### Scenario: Replacing a dashboard file
+- **WHEN** a dashboard's JSON file is replaced and the settings repository is committed
+- **THEN** the Collector uses the new file within seconds, without a restart
+
+#### Scenario: Broken file
+- **WHEN** a committed dashboard file is not valid JSON
+- **THEN** it is refused, the previous version keeps being used, and the Collector's settings page names the file
+  and the problem
+
+#### Scenario: Unknown variable in filters
+- **WHEN** `filters: { envv: prod }` is given for a dashboard that has no variable `envv`
+- **THEN** the settings are refused and the message lists the dashboard's variables

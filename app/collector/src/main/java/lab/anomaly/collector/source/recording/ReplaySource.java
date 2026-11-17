@@ -111,6 +111,11 @@ public final class ReplaySource implements MetricSource {
         return metadata.getOrDefault(metric, Optional.empty());
     }
 
+    /** Ids of every recorded dashboard, sorted (replay plays them all, add-dashboard-json design J7). */
+    public List<String> dashboardIds() {
+        return dashboards.keySet().stream().sorted().toList();
+    }
+
     public List<Recorded> timeseriesInOrder() {
         return List.copyOf(inOrder);
     }

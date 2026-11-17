@@ -23,10 +23,26 @@ public final class DatadogCredentials {
 
     /** Reads DD_API_KEY and DD_APP_KEY from the environment and logs which are present. */
     public static DatadogCredentials fromEnvironment(Environment environment) {
+        return fromEnvironment(environment, "DD_API_KEY", "DD_APP_KEY", "default");
+    }
+
+    /**
+     * Reads the two keys named by a source's settings (add-multi-site design M6). The names were checked against
+     * {@code CollectorSettings.KEY_NAME} before; only presence is logged.
+     */
+    public static DatadogCredentials fromEnvironment(Environment environment, String apiKeyName, String appKeyName, String source) {
         DatadogCredentials credentials =
-                new DatadogCredentials(environment.getProperty("DD_API_KEY"), environment.getProperty("DD_APP_KEY"));
-        log.info("Datadog keys from the environment: {}", credentials);
+                new DatadogCredentials(environment.getProperty(apiKeyName), environment.getProperty(appKeyName));
+        log.info("Datadog keys of source '{}' ({}, {}): {}", source, apiKeyName, appKeyName, credentials);
         return credentials;
+    }
+
+    /** What is missing, for health: "" when complete, else "API key", "application key" or "both". */
+    public String missing() {
+        if (apiKey == null && applicationKey == null) {
+            return "both";
+        }
+        return apiKey == null ? "API key" : applicationKey == null ? "application key" : "";
     }
 
     public boolean complete() {

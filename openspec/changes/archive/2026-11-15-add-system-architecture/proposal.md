@@ -57,9 +57,9 @@ so the behaviour of each service is specified in that service's own change. Draf
 
 | Not in this change | Why |
 |---|---|
-| Pulling APM traces | Datadog keeps too few traces at the org (the lab test showed the API returns only kept traces) |
+| Pulling APM traces | Datadog keeps only sampled traces (the lab test showed the API returns only kept traces) |
 | Grafana or Prometheus as a source | Not needed now; the Collector reads data through one interface so another source can be added later |
-| The org's Datadog | Built and tested on the personal trial only; using it at work needs the org's approval |
+| Other Datadog accounts | Built and tested on a personal trial account only |
 | Real behaviour of each service | Each service gets its own change later (`add-contracts`, then one per service) |
 | The web page's look and framework | Decided in the Notifier's change |
 

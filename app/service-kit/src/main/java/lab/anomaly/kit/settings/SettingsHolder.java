@@ -82,9 +82,21 @@ public final class SettingsHolder<T> implements ApplicationListener<EnvironmentC
     }
 
     /** Reloads only when a changed key belongs to this group, so unrelated changes cost nothing. */
+    /**
+     * Also reload when one of these keys changes, for settings that live outside the prefix: the Collector's dashboard
+     * files change only {@code config.client.version} (the commit id) when nothing in the YAML changed
+     * (add-dashboard-json design J3).
+     */
+    public SettingsHolder<T> alsoReloadOn(String... keys) {
+        extraKeys = java.util.Set.of(keys);
+        return this;
+    }
+
+    private volatile java.util.Set<String> extraKeys = java.util.Set.of();
+
     @Override
     public void onApplicationEvent(EnvironmentChangeEvent event) {
-        if (event.getKeys().stream().anyMatch(key -> key.startsWith(prefix + "."))) {
+        if (event.getKeys().stream().anyMatch(key -> key.startsWith(prefix + ".") || extraKeys.contains(key))) {
             reload();
         }
     }

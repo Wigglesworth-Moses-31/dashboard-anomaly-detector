@@ -40,7 +40,7 @@ partial) are now produced by the Collector and verified here, without changing t
 | Spotting spikes | `add-detector` |
 | Datadog monitors, APM traces, logs | Not part of this system |
 | Sources other than Datadog (Grafana, Prometheus) | Later; the Collector already reads through one interface |
-| The org's Datadog | Personal trial only, until the org approves |
+| Other Datadog accounts | Built and tested on a personal trial account only |
 
 ## Impact
 

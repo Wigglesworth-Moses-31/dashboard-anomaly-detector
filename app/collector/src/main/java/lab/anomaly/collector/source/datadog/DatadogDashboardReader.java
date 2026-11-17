@@ -18,11 +18,11 @@ import tools.jackson.databind.JsonNode;
  * the nesting. Unknown widget types are not an error: if they have metric queries they are used, otherwise they
  * are counted as skipped.
  */
-final class DatadogDashboardReader {
+public final class DatadogDashboardReader {
 
     private record Visit(JsonNode widget, String path) {}
 
-    static Dashboard read(JsonNode root) {
+    public static Dashboard read(JsonNode root) {
         List<TemplateVariable> variables = new ArrayList<>();
         for (JsonNode v : root.path("template_variables")) {
             String defaultValue = v.path("default").isMissingNode() || v.path("default").isNull()
@@ -34,7 +34,24 @@ final class DatadogDashboardReader {
         List<Panel> panels = new ArrayList<>();
         int skipped = 0;
         Deque<Visit> stack = new ArrayDeque<>();
-        pushAll(stack, root.path("widgets"), "");
+        // Top level, in order: an empty group is a section heading for the panels below it, until the next group
+        // (add-dashboard-json design J12). Same O(W) walk.
+        List<Visit> top = new ArrayList<>();
+        String section = "";
+        for (JsonNode widget : root.path("widgets")) {
+            JsonNode definition = widget.path("definition");
+            if ("group".equals(text(definition.path("type")))) {
+                boolean empty = !definition.path("widgets").isArray() || definition.path("widgets").isEmpty();
+                section = empty ? text(definition.path("title")) : "";
+                if (empty) {
+                    continue;
+                }
+            }
+            top.add(new Visit(widget, section));
+        }
+        for (int i = top.size() - 1; i >= 0; i--) {
+            stack.push(top.get(i));
+        }
         while (!stack.isEmpty()) {
             Visit visit = stack.pop();
             JsonNode definition = visit.widget().path("definition");
@@ -58,7 +75,28 @@ final class DatadogDashboardReader {
                 skipped++;
             }
         }
-        return new Dashboard(text(root.path("id")), text(root.path("title")), variables, panels, skipped);
+        return new Dashboard(text(root.path("id")), text(root.path("title")), variables, panels, skipped, presets(root));
+    }
+
+    /** Saved views: {"name", "template_variables": [{"name", "value" | "values"}]} (design J10). */
+    private static List<Dashboard.Preset> presets(JsonNode root) {
+        List<Dashboard.Preset> presets = new ArrayList<>();
+        for (JsonNode p : root.path("template_variable_presets")) {
+            java.util.Map<String, List<String>> values = new java.util.LinkedHashMap<>();
+            for (JsonNode v : p.path("template_variables")) {
+                List<String> list = new ArrayList<>();
+                if (v.path("values").isArray()) {
+                    v.path("values").forEach(x -> list.add(text(x)));
+                } else if (!v.path("value").isMissingNode() && !v.path("value").isNull()) {
+                    list.add(text(v.path("value")));
+                }
+                if (!list.isEmpty() && !text(v.path("name")).isEmpty()) {
+                    values.put(text(v.path("name")), List.copyOf(list));
+                }
+            }
+            presets.add(new Dashboard.Preset(text(p.path("name")), values));
+        }
+        return presets;
     }
 
     /** Pushed in reverse so the walk visits widgets in their on-screen order. */
@@ -108,7 +146,7 @@ final class DatadogDashboardReader {
         return path.isEmpty() ? title : path + " / " + title;
     }
 
-    static String text(JsonNode node) {
+    public static String text(JsonNode node) {
         return node == null || node.isMissingNode() || node.isNull() ? "" : node.asString();
     }
 

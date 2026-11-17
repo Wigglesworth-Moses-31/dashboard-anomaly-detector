@@ -54,6 +54,7 @@ public final class Detector {
 
     public void describe(SeriesDescriptor d) {
         LineFacts f = LineFacts.of(d);
+        book.noteSite(f.site());                     // sites are known from descriptions, before any spike (M9)
         facts.put(f.seriesId(), f);
         for (View v : f.views()) {
             dashboardTitles.put(v.getViewId(), v.getViewTitle());

@@ -18,25 +18,44 @@ import lab.anomaly.collector.source.TimeseriesRequest;
 public final class PollPlan {
 
     public static List<PollUnit> build(List<Dashboard> dashboards, Map<String, Map<String, String>> filtersByDashboard, Duration step) {
+        return build("default", dashboards, filtersByDashboard, step);
+    }
+
+    /** The plan of one source (add-multi-site design M3): questions are merged only within that source. */
+    public static List<PollUnit> build(String lane, List<Dashboard> dashboards, Map<String, Map<String, String>> filtersByDashboard,
+                                       Duration step) {
+        List<WatchedView> views = new ArrayList<>();
+        for (Dashboard d : dashboards) {
+            views.add(WatchedView.of(d, filtersByDashboard.getOrDefault(d.id(), Map.of())));
+        }
+        return buildViews(lane, views, step);
+    }
+
+    /**
+     * The plan of a source's views (add-dashboard-json design J10): every panel of every view filled with that view's
+     * values. Equal questions are merged by their canonical text in a hash map, O(1) each, so a question two presets
+     * share is asked once and its unit lists both views. O(views × panels).
+     */
+    public static List<PollUnit> buildViews(String lane, List<WatchedView> views, Duration step) {
         Map<String, PollUnit> byKey = new LinkedHashMap<>();
-        for (Dashboard dashboard : dashboards) {
-            Map<String, String> values = FilterFiller.values(dashboard.variables(),
-                    filtersByDashboard.getOrDefault(dashboard.id(), Map.of()));
+        for (WatchedView v : views) {
+            Dashboard dashboard = v.dashboard();
+            String filters = v.filtersText();
             for (Panel panel : dashboard.panels()) {
                 List<Query> queries = new ArrayList<>();
                 for (Query query : panel.queries()) {
-                    String filled = FilterFiller.fill(query.text(), dashboard.variables(), values);
+                    String filled = FilterFiller.fillMulti(query.text(), dashboard.variables(), v.values());
                     queries.add(new Query(query.name(), QueryPlanner.withRollup(filled, step)));
                 }
                 String key = new TimeseriesRequest(queries, panel.formulas(), 0, 0, 0).canonicalQuestion();
-                PollUnit.View view = new PollUnit.View(dashboard.id(), dashboard.title(), panel.title(), panel.path());
+                PollUnit.View view = new PollUnit.View(v.viewId(), v.viewTitle(), panel.title(), panel.path(), filters);
                 PollUnit existing = byKey.get(key);
                 if (existing == null) {
-                    byKey.put(key, new PollUnit(key, queries, panel.formulas(), List.of(view)));
+                    byKey.put(key, new PollUnit(key, queries, panel.formulas(), List.of(view), lane));
                 } else if (!existing.views().contains(view)) {
-                    List<PollUnit.View> views = new ArrayList<>(existing.views());
-                    views.add(view);
-                    byKey.put(key, new PollUnit(key, existing.queries(), existing.formulas(), views));
+                    List<PollUnit.View> all = new ArrayList<>(existing.views());
+                    all.add(view);
+                    byKey.put(key, new PollUnit(key, existing.queries(), existing.formulas(), all, lane));
                 }
             }
         }

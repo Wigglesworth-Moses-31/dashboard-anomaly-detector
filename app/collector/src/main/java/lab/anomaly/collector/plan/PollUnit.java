@@ -4,19 +4,42 @@ import java.util.List;
 import lab.anomaly.collector.source.Dashboard.Query;
 
 /**
- * One request to the source, polled on a schedule. Several panels (on one or more dashboards) asking the same
- * question share one unit: {@code views} lists them all.
+ * One request to the source, polled on a schedule. Several panels (on one or more dashboards) of one source asking
+ * the same question share one unit: {@code views} lists them all.
+ *
+ * <p>{@code key} is the canonical question; line ids are built from it, so it must not change (add-multi-site:
+ * old line ids stay). {@code lane} is the source the unit belongs to, and {@link #id()} = {@code lane|key} is what
+ * the scheduler, breakers and maps use, so the same question in two sources is two units (design M3).
  */
-public record PollUnit(String key, List<Query> queries, List<String> formulas, List<View> views) {
+public record PollUnit(String key, List<Query> queries, List<String> formulas, List<View> views, String lane) {
 
     public PollUnit {
         queries = List.copyOf(queries);
         formulas = List.copyOf(formulas);
         views = List.copyOf(views);
+        lane = lane == null || lane.isBlank() ? "default" : lane;
     }
 
-    /** A panel showing this unit's numbers. */
-    public record View(String dashboardId, String dashboardTitle, String panelTitle, String path) {}
+    public PollUnit(String key, List<Query> queries, List<String> formulas, List<View> views) {
+        this(key, queries, formulas, views, "default");
+    }
+
+    /** Scheduling id: unique across sources. */
+    public String id() {
+        return lane + "|" + key;
+    }
+
+    /** A panel showing this unit's numbers; {@code filters} is the view's decided filters (for health and the check). */
+    public record View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters) {
+        public View(String dashboardId, String dashboardTitle, String panelTitle, String path) {
+            this(dashboardId, dashboardTitle, panelTitle, path, "");
+        }
+
+        /** "Upstream Service Metrics / Latencies". */
+        public String panelLabel() {
+            return path == null || path.isEmpty() ? panelTitle : path + " / " + panelTitle;
+        }
+    }
 
     /** True when formula number {@code index} computes something, rather than showing one query as it is. */
     public boolean hasFormula(int index) {

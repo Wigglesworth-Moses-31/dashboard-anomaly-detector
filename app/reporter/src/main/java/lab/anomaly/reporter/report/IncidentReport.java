@@ -158,6 +158,7 @@ public final class IncidentReport extends ReportTemplate {
         for (SeriesDescriptor l : d.lines()) {
             byId.put(l.getSeriesId(), l);
         }
+        boolean multiSite = multiSite(d);
         md.append("## Lines that moved most\n\nHighest value against the window's average.\n\n| Line | Highest | Average | Times | Panel |\n|---|---|---|---|---|\n");
         for (Moved m : top) {
             SeriesDescriptor l = byId.get(m.s().getSeriesId());
@@ -165,7 +166,7 @@ public final class IncidentReport extends ReportTemplate {
             md.append("| ").append(esc(l == null ? m.s().getSeriesId() : l.getMetric() + tags(l.getGroupTagsMap()))).append(" | ")
                     .append(value(m.s().getMax(), unit)).append(" | ").append(value(m.s().getMean(), unit)).append(" | ")
                     .append(String.format(Locale.ROOT, "%.1f×", m.ratio())).append(" | ")
-                    .append(l == null || l.getViewsCount() == 0 ? "" : esc(l.getViews(0).getPanelTitle())).append(" |\n");
+                    .append(l == null || l.getViewsCount() == 0 ? "" : esc(site(l, multiSite) + l.getViews(0).getPanelTitle())).append(" |\n");
         }
         md.append('\n');
     }
@@ -177,10 +178,11 @@ public final class IncidentReport extends ReportTemplate {
             inWindow.add(s.getSeriesId());                            // only lines that had values in this window
         }
         Map<String, Integer> byPanel = new TreeMap<>();
+        boolean multiSite = multiSite(d);
         for (SeriesDescriptor l : d.lines()) {
             if (l.getKind() == Kind.KIND_UNKNOWN && inWindow.contains(l.getSeriesId())) {
                 View v = l.getViewsCount() == 0 ? View.getDefaultInstance() : l.getViews(0);
-                byPanel.merge(v.getViewTitle() + " / " + v.getPanelTitle(), 1, Integer::sum);
+                byPanel.merge(site(l, multiSite) + v.getViewTitle() + " / " + v.getPanelTitle(), 1, Integer::sum);
             }
         }
         if (byPanel.isEmpty()) {
@@ -192,6 +194,23 @@ public final class IncidentReport extends ReportTemplate {
     }
 
     // ---- helpers --------------------------------------------------------------------------------------------
+
+    /** True when the window's lines come from two or more Datadog sites (add-multi-site). One pass, O(lines). */
+    static boolean multiSite(ReportData d) {
+        java.util.Set<String> sites = new java.util.HashSet<>();
+        for (SeriesDescriptor l : d.lines()) {
+            sites.add(l.getSource().getInstance());
+            if (sites.size() > 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** "EU · " when several sites are watched, else "". */
+    private static String site(SeriesDescriptor l, boolean multiSite) {
+        return multiSite && !l.getSource().getInstance().isBlank() ? lab.anomaly.contracts.Sites.label(l.getSource().getInstance()) + " · " : "";
+    }
 
     static boolean stillOpen(Incident i, ReportData d) {
         return i.getState() != IncidentState.INCIDENT_STATE_CLOSED || i.getEndedMs() > d.window().endMs();

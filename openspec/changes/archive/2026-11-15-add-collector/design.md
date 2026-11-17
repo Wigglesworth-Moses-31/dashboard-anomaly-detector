@@ -184,7 +184,7 @@ canonical request, and a replay clock follows the recorded times, so a replay is
 - [A formula changes on a dashboard] → its `query_id` changes, so it becomes a new line; the old line simply
   stops. Acceptable: the panel really changed.
 - [The trial ends ~26 Nov] → record during live verification (task 10); later work uses replay.
-- [Shared account limits at the org] → `rate-limit-share` below 1, and every request counted in the logs.
+- [Rate limits shared with other users of a larger account] → `rate-limit-share` below 1, and every request counted in the logs.
 
 ## Migration Plan
 

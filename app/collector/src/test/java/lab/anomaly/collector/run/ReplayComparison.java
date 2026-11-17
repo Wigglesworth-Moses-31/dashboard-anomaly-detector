@@ -53,7 +53,7 @@ final class ReplayComparison {
                 new Classifier(replay, s.metadataCacheSize(), s.metadataTtl().toMillis(), clock),
                 new Emitter(sink, (int) (s.backfill().toMillis() / s.step().toMillis()) + 6), s::classification);
         Map<String, PollUnit> plan = new HashMap<>();
-        new Discovery(replay).plan(s.dashboards(), s.dashboardFilters(), s.step()).forEach(u -> plan.put(u.key(), u));
+        new Discovery(replay).plan(replay.dashboardIds(), s.dashboardFilters(), s.step()).forEach(u -> plan.put(u.key(), u));
         for (ReplaySource.Recorded recorded : replay.timeseriesInOrder()) {
             PollUnit unit = plan.get(recorded.request().canonicalQuestion());
             if (unit != null && recorded.answer() != null) {

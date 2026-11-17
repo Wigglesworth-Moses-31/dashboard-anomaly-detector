@@ -1,12 +1,12 @@
 schema: spec-driven
 
 context: |
-  Personal resume project: a system that watches 10-15 Datadog dashboards, catches short metric spikes
-  within seconds, alerts live in a web page, and writes a daily Markdown report. Built in this lab on a
-  personal Datadog trial; meant to be reused at the user's organisation later, so keep it vendor-neutral
+  Portfolio project: a system that watches 10-15 Datadog dashboards, catches short metric spikes
+  within seconds, alerts live in a web page, and writes a daily Markdown report. Built and tested on a
+  personal Datadog trial account; anyone can run it with their own account, so keep it vendor-neutral
   where cheap (the data source sits behind one interface).
   Scope: Datadog metrics only. No APM trace pulling (retention too low). No Grafana/Prometheus for now.
-  Stack: Java 26 (virtual threads), Kafka, gRPC, RSocket, Protobuf, a time-series database, Postgres.
+  Stack: Java 25 (virtual threads), Kafka, gRPC, RSocket, Protobuf, a time-series database, Postgres.
   All settings live outside the code (YAML in Git, served by a Config Service); a settings change must
   never require a code change.
   Datadog keys are in .env and must never appear in any artifact, log or commit.

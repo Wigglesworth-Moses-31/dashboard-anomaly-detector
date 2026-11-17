@@ -30,4 +30,24 @@ class DatadogCredentialsTest {
         assertThat(credentials.complete()).isFalse();
         assertThat(credentials.toString()).isEqualTo("API key MISSING, application key MISSING");
     }
+
+    @Test
+    void keysAreReadByTheirSettingsNames() {
+        DatadogCredentials credentials = DatadogCredentials.fromEnvironment(new MockEnvironment()
+                .withProperty("DD_EU_API_KEY", FAKE_API_KEY)
+                .withProperty("DD_EU_APP_KEY", FAKE_APP_KEY), "DD_EU_API_KEY", "DD_EU_APP_KEY", "eu");
+        assertThat(credentials.complete()).isTrue();
+        assertThat(credentials.missing()).isEmpty();
+    }
+
+    @Test
+    void apiKeyWithoutApplicationKeyIsNamed() {
+        DatadogCredentials credentials = DatadogCredentials.fromEnvironment(new MockEnvironment()
+                .withProperty("DD_EU_API_KEY", FAKE_API_KEY), "DD_EU_API_KEY", "DD_EU_APP_KEY", "eu");
+        assertThat(credentials.complete()).isFalse();
+        assertThat(credentials.missing()).isEqualTo("application key");
+        assertThat(credentials.toString()).doesNotContain(FAKE_API_KEY);
+        assertThat(DatadogCredentials.fromEnvironment(new MockEnvironment(), "DD_EU_API_KEY", "DD_EU_APP_KEY", "eu").missing())
+                .isEqualTo("both");
+    }
 }

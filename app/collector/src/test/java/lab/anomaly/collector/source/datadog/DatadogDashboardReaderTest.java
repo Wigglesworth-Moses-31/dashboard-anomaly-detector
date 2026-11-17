@@ -42,7 +42,8 @@ class DatadogDashboardReaderTest {
     void findsPanelsInsideGroupsAndSplitGroupsWithTheirPath() throws Exception {
         List<Panel> panels = read("lab-skeleton-dashboard.json").panels();
 
-        Panel splitLatency = panels.stream().filter(p -> p.title().equals("Latencies") && p.path().isEmpty()).findFirst().orElseThrow();
+        // Below the empty group "API Metrics", which is a section heading (add-dashboard-json design J12)
+        Panel splitLatency = panels.stream().filter(p -> p.title().equals("Latencies") && p.path().equals("API Metrics")).findFirst().orElseThrow();
         assertThat(splitLatency.queries()).extracting(q -> q.text()).allMatch(t -> t.contains("lab.api.latency"));
         assertThat(panels).anyMatch(p -> p.path().equals("API Gateway Metrics") && p.title().equals("Latency"));
         assertThat(panels).anyMatch(p -> p.path().equals("Service Analytics") && p.title().equals("Total Service Traffic by API"));

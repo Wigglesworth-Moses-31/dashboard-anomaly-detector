@@ -20,10 +20,14 @@ public record LineFacts(String seriesId, String metric, String kind, String unit
 
     /** Link to a dashboard at a time window, for Datadog sources; empty otherwise. */
     public String dashboardUrl(String viewId, long fromMs, long toMs) {
-        if (site == null || site.isBlank() || viewId.isBlank()) {
-            return "";
+        if (site == null || site.isBlank() || viewId.isBlank() || viewId.startsWith("file:")) {
+            return "";                                                     // no dashboard id known (add-dashboard-json J4)
         }
-        String host = site.equals("datadoghq.com") ? "app.datadoghq.com" : site;
+        int preset = viewId.indexOf('#');                                  // "abc-def-ghi#Payments": a saved view of it
+        if (preset >= 0) {
+            viewId = viewId.substring(0, preset);
+        }
+        String host = lab.anomaly.contracts.Sites.appHost(site);              // datadoghq.eu → app.datadoghq.eu
         return "https://" + host + "/dashboard/" + viewId + "?from_ts=" + fromMs + "&to_ts=" + toMs + "&live=false";
     }
 

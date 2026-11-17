@@ -77,7 +77,7 @@ class LiveDataCheckTest {
 
         // /v1/invoices: one incident per cycle once lines have 10 minutes of history (08:08 to 08:40). From 08:16 each
         // also lists its 500 errors; at 08:08 the error line's history already holds two broken cycles (08:00, 08:08).
-        List<Incident> invoices = incidents.values().stream().filter(i -> i.getGroupKey().equals("api=/v1/invoices")).toList();
+        List<Incident> invoices = incidents.values().stream().filter(i -> i.getGroupKey().equals("datadoghq.com|api=/v1/invoices")).toList();
         assertThat(invoices).extracting(i -> i.getStartedMs() / CYCLE * CYCLE).extracting(LiveDataCheckTest::time)
                 .containsExactly("08:08:00", "08:16:00", "08:24:00", "08:32:00", "08:40:00");
         for (Incident i : invoices.subList(1, invoices.size())) {
@@ -86,7 +86,7 @@ class LiveDataCheckTest {
         // The other groups the generator breaks are found in every judgeable cycle too.
         for (String group : List.of("api=/v1/telemetry", "service=billing", "service=orders", "upstream_service=billing-core",
                 "upstream_service=telemetry-ingest", "dashboard=w2f-pqs-ghd")) {
-            assertThat(incidents.values().stream().filter(i -> i.getGroupKey().equals(group)).count()).as(group).isEqualTo(5);
+            assertThat(incidents.values().stream().filter(i -> i.getGroupKey().equals("datadoghq.com|" + group)).count()).as(group).isEqualTo(5);
         }
     }
 

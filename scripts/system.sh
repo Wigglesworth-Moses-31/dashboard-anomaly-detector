@@ -2,7 +2,7 @@
 # Start, stop or check the whole system: platform (Kafka, TimescaleDB) + Config Service + 5 services.
 #   scripts/system.sh start | stop | status
 # Needs Docker (Docker Desktop, Colima, ...) and Java 25. First time: scripts/setup.sh.
-# Logs and process ids go to run/ (git-ignored). Datadog keys from .env reach the Collector only.
+# Logs and process ids go to run/ (git-ignored). Datadog keys from .env reach the Collector only, and only they do.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN="$ROOT/run"
@@ -28,9 +28,13 @@ start_service() {  # name port [with-datadog-keys]
     ( export PLATFORM_DB_PASSWORD="$(grep -E '^PLATFORM_DB_PASSWORD=' "$ROOT/.env" | cut -d= -f2-)"
       exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   elif [ "${3:-}" = "with-datadog-keys" ]; then
-    # Read only the two Datadog keys from .env into this one process; never echo them
-    ( export DD_API_KEY="$(grep -E '^DD_API_KEY=' "$ROOT/.env" | cut -d= -f2-)" \
-             DD_APP_KEY="$(grep -E '^DD_APP_KEY=' "$ROOT/.env" | cut -d= -f2-)"
+    # Only Datadog keys (DD_API_KEY, DD_APP_KEY, DD_<NAME>_API_KEY, DD_<NAME>_APP_KEY) from .env into this one
+    # process, with shell builtins only (never on a command line, never echoed); never the database password
+    ( while IFS= read -r line || [ -n "$line" ]; do
+        key="${line%%=*}"
+        if [[ "$key" =~ ^DD_([A-Z0-9]+_)?(API|APP)_KEY$ ]]; then export "$key=${line#*=}"; fi
+      done < "$ROOT/.env"
+      unset line key
       exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   else
     java -Xmx256m -jar "$jar" > "$RUN/$name.log" 2>&1 &
