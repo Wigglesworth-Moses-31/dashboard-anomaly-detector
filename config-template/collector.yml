@@ -24,6 +24,7 @@ __SOURCES__
     step: 10s                                 # size of each data step (highest value per step)
     backfill: 10m                             # how much history to fetch at start
     recent-window: 2m                         # how much to fetch on each later poll
+    settle-delay: 60s                         # a step is judged only this long after its end (Datadog may still be receiving it)
     dashboard-refresh: 60m                    # how often to re-read dashboard definitions
 
     # --- everything below is read live; no code change needed ---

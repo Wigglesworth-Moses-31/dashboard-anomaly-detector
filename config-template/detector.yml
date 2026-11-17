@@ -43,7 +43,7 @@ anomaly:
         steps: 3
       - signal: errors                      # before traffic: an error count is also a request count
         match:
-          tags: ["status_code=4*", "status_code=5*", "http.status_code=4*", "http.status_code=5*", "rpc.grpc.status_code!=0"]
+          tags: ["status_code=4*", "status_code=5*", "status=4*", "status=5*", "http.status_code=4*", "http.status_code=5*", "rpc.grpc.status_code!=0"]
           metric: ["*.errors"]
         direction: up
         factor: 3

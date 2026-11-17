@@ -16,12 +16,12 @@ import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.FileSystemResource;
 
-/** Test helpers: the real default settings from config-repo, the 226 recorded lines, and made-up lines. */
+/** Test helpers: the default settings that ship (config-template), the 226 recorded lines, and made-up lines. */
 public final class Fixtures {
 
-    public static final Path DETECTOR_YML = Path.of("../../config-repo/detector.yml");
+    public static final Path DETECTOR_YML = Path.of("../../config-template/detector.yml");   // what ships, not this machine's settings
 
-    /** Loads config-repo/detector.yml exactly as the service would, with its validators. */
+    /** Loads config-template/detector.yml exactly as the service would, with its validators. */
     public static SettingsHolder<DetectorSettings> holder(Map<String, Object> overrides) {
         try {
             StandardEnvironment env = new StandardEnvironment();
@@ -36,7 +36,7 @@ public final class Fixtures {
         }
     }
 
-    /** Loads config-repo/detector.yml after editing its text, as an operator would. */
+    /** Loads config-template/detector.yml after editing its text, as an operator would. */
     public static SettingsHolder<DetectorSettings> holderEdited(java.util.function.UnaryOperator<String> edit) {
         try {
             String text = edit.apply(java.nio.file.Files.readString(DETECTOR_YML));

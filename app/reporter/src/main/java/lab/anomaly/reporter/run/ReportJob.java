@@ -30,9 +30,14 @@ public final class ReportJob {
     private final Sources sources;
     private final ReportState state;
     private final Path dir;
-    private final IncidentReport writer = new IncidentReport();
+    private final IncidentReport writer;
 
     public ReportJob(Sources sources, ReportState state, Path dir) {
+        this(sources, state, dir, new lab.anomaly.kit.settings.SharedSettings("UTC", "lab").displayZones());
+    }
+
+    public ReportJob(Sources sources, ReportState state, Path dir, java.util.List<java.time.ZoneId> zones) {
+        this.writer = new IncidentReport(zones);
         this.sources = sources;
         this.state = state;
         this.dir = dir;

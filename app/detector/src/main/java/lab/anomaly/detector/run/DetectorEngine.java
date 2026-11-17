@@ -135,7 +135,9 @@ public class DetectorEngine {
         long nextLag = 0;
         try (KafkaConsumer<String, byte[]> c = new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer())) {
             this.consumer = c;
-            c.subscribe(List.of(Topics.METRIC_SERIES, Topics.METRIC_POINTS), new ConsumerRebalanceListener() {
+            // incident-commands: a person's reason closes an incident; read on this same thread, so the incident book
+            // has a single writer and needs no locks (add-incident-resolution S3)
+            c.subscribe(List.of(Topics.METRIC_SERIES, Topics.METRIC_POINTS, Topics.INCIDENT_COMMANDS), new ConsumerRebalanceListener() {
                 @Override
                 public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
                 }
@@ -155,6 +157,10 @@ public class DetectorEngine {
                 // read ahead of others a line can look missing. At lag 0 every line of an answer has been read.
                 if (!records.isEmpty() && caughtUp(c)) {
                     changes.addAll(detector.checkSilence(readMs));
+                }
+                if (readMs >= nextReannounce) {                              // waiting incidents stay in Kafka's 2 days (S4)
+                    changes.addAll(detector.reannounce(readMs, REANNOUNCE_EVERY_MS));
+                    nextReannounce = readMs + 3_600_000;
                 }
                 save(changes);
                 if (!records.isEmpty()) {
@@ -194,6 +200,32 @@ public class DetectorEngine {
         return any;
     }
 
+    private long nextReannounce = System.currentTimeMillis() + 3_600_000;
+    static final long REANNOUNCE_EVERY_MS = 12 * 3_600_000L;
+
+    /** Close commands: checked, then applied by the book; unknown, closed or invalid ones change nothing (S3). */
+    private List<Change> commands(ConsumerRecords<String, byte[]> records, long readMs) {
+        List<Change> changes = new ArrayList<>();
+        for (ConsumerRecord<String, byte[]> r : records.records(Topics.INCIDENT_COMMANDS)) {
+            try {
+                lab.anomaly.contracts.v1.ResolveIncident cmd = lab.anomaly.contracts.v1.ResolveIncident.parseFrom(r.value());
+                List<String> problems = ContractChecks.problems(cmd);
+                if (!problems.isEmpty()) {
+                    stats.messagesSetAside.incrementAndGet();
+                    log.warn("Close command {} set aside: {}", cmd.getCommandId(), problems);
+                    continue;
+                }
+                List<Change> closed = detector.resolve(cmd.getIncidentId(), cmd.getReason(), readMs);
+                log.info("Close command {} for incident {}: {}", cmd.getCommandId(), cmd.getIncidentId(),
+                        closed.isEmpty() ? "nothing to close (unknown or already closed)" : "closed with its reason");
+                changes.addAll(closed);
+            } catch (Exception e) {
+                stats.messagesSetAside.incrementAndGet();
+            }
+        }
+        return changes;
+    }
+
     private List<Change> process(ConsumerRecords<String, byte[]> records, long readMs) {
         for (ConsumerRecord<String, byte[]> r : records.records(Topics.METRIC_SERIES)) {
             try {
@@ -230,6 +262,7 @@ public class DetectorEngine {
                 stats.valuesJudged.incrementAndGet();
             }
         }
+        changes.addAll(commands(records, readMs));
         return changes;
     }
 

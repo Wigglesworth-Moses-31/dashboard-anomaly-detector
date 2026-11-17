@@ -39,7 +39,8 @@ public record CollectorSettings(
         Recording recording,
         String replayDir,
         List<Source> sources,
-        Integer batchFormulas) {
+        Integer batchFormulas,
+        Duration settleDelay) {
 
     /** Kinds a rule may assign (the Kind enum of the contracts, in lower case). */
     public static final Set<String> KINDS = Set.of("unknown", "count", "rate", "gauge", "latency", "ratio");
@@ -138,8 +139,31 @@ public record CollectorSettings(
                              int metadataCacheSize, Recording recording, String replayDir, List<Source> sources) {
         this(source, datadogSite, dashboards, pollInterval, step, backfill, recentWindow, dashboardRefresh, dashboardFilters,
                 classification, maxConcurrentRequests, rateLimitShare, retries, retryBase, retryCap, breakerFailures,
-                breakerOpen, metadataTtl, metadataCacheSize, recording, replayDir, sources, null);
+                breakerOpen, metadataTtl, metadataCacheSize, recording, replayDir, sources, null, null);
     }
+
+    /** The settings with {@code sources} and {@code batch-formulas}, without {@code settle-delay} (its default applies). */
+    public CollectorSettings(String source, String datadogSite, List<DashboardRef> dashboards, Duration pollInterval, Duration step,
+                             Duration backfill, Duration recentWindow, Duration dashboardRefresh,
+                             Map<String, Map<String, String>> dashboardFilters, List<ClassificationRule> classification,
+                             int maxConcurrentRequests, double rateLimitShare, int retries, Duration retryBase,
+                             Duration retryCap, int breakerFailures, Duration breakerOpen, Duration metadataTtl,
+                             int metadataCacheSize, Recording recording, String replayDir, List<Source> sources,
+                             Integer batchFormulas) {
+        this(source, datadogSite, dashboards, pollInterval, step, backfill, recentWindow, dashboardRefresh, dashboardFilters,
+                classification, maxConcurrentRequests, rateLimitShare, retries, retryBase, retryCap, breakerFailures,
+                breakerOpen, metadataTtl, metadataCacheSize, recording, replayDir, sources, batchFormulas, null);
+    }
+
+    /**
+     * How long after its end a step is still treated as unfinished (fix-false-drops design F1): the source may still be
+     * receiving its values. Default 60 s.
+     */
+    public Duration effectiveSettleDelay() {
+        return settleDelay == null ? DEFAULT_SETTLE_DELAY : settleDelay;
+    }
+
+    public static final Duration DEFAULT_SETTLE_DELAY = Duration.ofSeconds(60);
 
     /** Most formulas in one Datadog call (design J14); 1 = no batching. Recording turns batching off. */
     public int effectiveBatchFormulas() {
@@ -193,6 +217,11 @@ public record CollectorSettings(
                 SettingsValidator.positive("backfill", CollectorSettings::backfill),
                 SettingsValidator.positive("recent-window", CollectorSettings::recentWindow),
                 SettingsValidator.positive("dashboard-refresh", CollectorSettings::dashboardRefresh),
+                SettingsValidator.require("settle-delay", s -> s.settleDelay() == null || !s.settleDelay().isNegative(),
+                        "must be 0 or more"),
+                SettingsValidator.require("settle-delay", s -> s.recentWindow() == null
+                        || s.effectiveSettleDelay().compareTo(s.recentWindow()) < 0,
+                        "must be shorter than recent-window, or a step would leave the window before it is finished"),
                 SettingsValidator.require("recent-window",
                         s -> s.recentWindow() == null || s.backfill() == null || s.recentWindow().compareTo(s.backfill()) <= 0,
                         "must not be longer than backfill"),

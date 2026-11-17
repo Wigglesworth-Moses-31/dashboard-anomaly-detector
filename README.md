@@ -62,13 +62,12 @@ scripts/setup.sh
 | The dashboard JSON files (drag them into the terminal) | Copies them to `config-repo/dashboards/<source>/`. If a dashboard has saved views, asks whether to watch them all (each becomes its own view, e.g. "Shop · Payments"). If the file has no id, asks for it (from the URL) so incidents can link to the dashboard |
 | — | After the build, asks every panel once (read-only) and prints how many lines each returned, with the exact filters used |
 | "Add another source?" | Say `y` for a second region, for example `eu` on `datadoghq.eu` |
-| Your time zone (it suggests your machine's) | Defines "today" for the live page and the daily report |
 | — | Creates `config-repo/` from `config-template/`, its own Git repository with your settings |
 | — | Builds the six services (first time: a few minutes) |
 
 Unattended (for example on a server): set `SOURCES="us eu"` and, per source, `DD_US_API_KEY`, `DD_US_APP_KEY`,
-`DD_US_SITE`, `DASHBOARDS_US="id1 id2"` (and the same with `EU`), plus `TIME_ZONE`. The older single-source form
-(`DD_API_KEY`, `DD_APP_KEY`, `DD_SITE`, `DASHBOARDS`) still works. `--no-check` skips the Datadog calls, `--no-build`
+`DD_US_SITE`, `DASHBOARD_FILES_US="shop.json platform.json"` (paths without spaces) and optionally `PRESETS_US=all|none`
+(and the same with `EU`); `TIME_ZONE` is optional (default `UTC`). `--no-check` skips the Datadog calls, `--no-build`
 skips the build.
 
 ## Run
@@ -84,7 +83,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | Live incidents of the day: open ones first, a meter of how far each line is from normal, a link to the dashboard at that moment, counts per group, a filter (`/`). 🔔 and 🔊 switch on a desktop notification and a sound for new incidents |
+| http://localhost:8104 | Live incidents of the day: open ones first; each affected line as a path **view → panel group → panel → line → value** (normal and the change, e.g. −94%), shown in full; **▸ history** on a line shows the last time before and every incident of that line in the last 2 days, with their reasons; an incident whose lines are normal again waits under **Needs a reason** until someone types why (**Close with reason**, kept with the incident) — nothing closes by itself; counts per group, a filter (`/`). 🔔 and 🔊 switch on a desktop notification and a sound for new incidents |
 | `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
@@ -123,10 +122,12 @@ breaks a rule (for example a 48-hour report window) is **refused**, the old valu
 | Give a dashboard's `$variable` a value | Edit its `default` in the JSON file, or add `filters: { env: prod }` next to the file (wins over the file) |
 | Watch a dashboard's saved views | `presets: all` next to the file (every saved view, each its own view), or `presets: [Payments, Billing]` |
 | Fewer Datadog calls | `batch-formulas` (default 40): panels due together share one call |
+| Faster alerts, or fewer false drops | `settle-delay` (default 60 s): a step is judged only this long after its end, because Datadog may still be receiving its values. Health shows `lateChanges` per source to tune it |
 | Tell the system what an unknown metric is (latency, count, ratio, gauge) | `collector.yml` → `classification` |
 | Alert more or less sharply, or on new kinds of metrics | `detector.yml` → `rules` (first match wins; any letter case) |
 | Group incidents by another tag (for example `endpoint`) | `detector.yml` → `group-by` |
-| Another time zone | `application.yml` → `anomaly.shared.time-zone` |
+| Which day is "today" | `application.yml` → `anomaly.shared.time-zone` (default `UTC`) |
+| Which time zones every time is shown in | `application.yml` → `anomaly.shared.display-time-zones` (default `[UTC, Asia/Kolkata, America/New_York]`, the first is the main one) |
 | Reports every 6 hours instead of daily | `reporter.yml` → `window: 6h` (1, 2, 3, 4, 6, 8, 12 or 24 hours) |
 
 ### Onboarding a dashboard: check before you run
@@ -174,6 +175,14 @@ own limit on calls in flight and its own breakers. A region that is throttled, d
 others keep their timing. When two or more sites are watched, incidents and reports name the site (`EU · /v1/invoices:
 latency up`), the same API in two regions is two incidents, and links open the right site (`app.datadoghq.eu`).
 
+### Upgrading an existing config-repo
+
+`setup.sh` copies `config-template/` once; later improvements to the template do not reach your `config-repo/`
+by themselves. Since 17 Nov 2026: in `detector.yml`, rule `errors`, add `"status=4*", "status=5*"` to `tags` (counts
+tagged `status`, not only `status_code`, are errors and alert only upwards). `settle-delay` needs no edit (60 s when
+missing). In `application.yml`: `time-zone: UTC` (today is the UTC day) and, optionally, `display-time-zones` (every
+time is shown in UTC, India and New York when the line is missing).
+
 ## Storage stays small
 
 | Kept | How long |
@@ -205,6 +214,8 @@ PLATFORM_DB_PASSWORD=... ./mvnw test -Dlive.db=true   # also the database tests 
 |---|---|
 | A source's health: `panelsWithNoLines`, or "N of N panels return no lines" | The filters of that view match nothing: run `scripts/check-dashboards.sh <source>`, fix the JSON's defaults, `filters:` or `presets:`, commit |
 | Settings refused: "is an id; dashboards are now JSON files" | Export the dashboard as JSON and list it as `- file:` (see *Onboarding a dashboard*) |
+| Many lines "traffic down" at the same moment | Late data: Datadog was still receiving the newest step. Health shows `lateChanges` / `maxChangeAfterSeconds` per source; raise `settle-delay` above that |
+| Health: "values still changed N s after their step" | Raise `settle-delay` in `collector.yml` above N (it must stay below `recent-window`) |
 | Health: "polling every N s instead of 15 s" | That account's rate limit is tight for this many panels; fine as long as N stays below `recent-window` (2 min) |
 | `setup.sh`: "no widgets; is this an exported dashboard JSON?" | Export again from Datadog (Share → Export dashboard JSON); a copy from a text editor may be cut short |
 | Collector health: `keys: missing: application key` for a source | Add `DD_<NAME>_APP_KEY` to `.env`, restart the Collector. The other sources keep running meanwhile |

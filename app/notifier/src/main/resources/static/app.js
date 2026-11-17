@@ -6,13 +6,14 @@ import { openStream } from "./rsocket.js";
 // ---- state ------------------------------------------------------------------------------------------------
 const incidents = new Map();      // id -> view { ev, seq, open, startMs, endMs, label, color, search, row, expanded }
 const openIds = [];               // sorted: newest start first
+const calmIds = [];               // sorted: newest calm first (add-incident-resolution: waiting for a reason)
 const closedIds = [];             // sorted: newest end first
 const groupCounts = new Map();    // group label -> incidents today
 let pending = new Map();          // id -> newest event not yet applied (coalescing)
 let frameScheduled = false;
 let staging = null;               // during a (re)connect: the new snapshot, applied at snapshot_complete
 let caughtUp = false;
-let day = "", zone = "Asia/Kolkata", dayByReceived = false;
+let day = "", zone = "UTC", dayByReceived = false;
 let longestMs = 0, lastChangeAt = 0;
 let filterText = "";
 let groupsDirty = false, countsDirty = false;
@@ -33,8 +34,52 @@ function setZone(z) {
   dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit" });
 }
 setZone(zone);
-const time = (ms) => timeFmt.format(ms);
-const shortTime = (ms) => time(ms).slice(0, 5);
+
+// Every time in each display zone, the main one first (add-display-time-zones Z2):
+//   13:04:10 UTC · 18:34:10 IST · 08:04:10 EST       a zone on another day adds its date: 04:40 IST (18 Nov)
+// Formatters are made once per zone list; zone names are cached per zone and day. Browsers name India "IST" only in
+// Indian English and New York "EST/EDT" only in US English, so each zone takes the first locale with a real
+// abbreviation, else the offset ("GMT+5:30").
+let zoneFmts = [];
+const labelCache = new Map();
+const LABEL_LOCALES = ["en-US", "en-IN", "en-GB", "en-AU"];
+function setDisplayZones(list) {
+  zoneFmts = (list && list.length ? list : ["UTC", "Asia/Kolkata", "America/New_York"]).map((z) => ({
+    zone: z,
+    secs: new Intl.DateTimeFormat("en-GB", { timeZone: z, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
+    mins: new Intl.DateTimeFormat("en-GB", { timeZone: z, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+    date: new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit" }),
+    dm: new Intl.DateTimeFormat("en-GB", { timeZone: z, day: "numeric", month: "short" }),
+  }));
+}
+setDisplayZones(null);
+function zoneLabel(z, ms, dateKey) {
+  const key = z + "|" + dateKey;
+  let label = labelCache.get(key);
+  if (label) return label;
+  let fallback = null;
+  for (const loc of LABEL_LOCALES) {
+    const name = new Intl.DateTimeFormat(loc, { timeZone: z, timeZoneName: "short" }).formatToParts(ms).find((p) => p.type === "timeZoneName").value;
+    if (fallback == null) fallback = name;
+    if (!/[+\-−]/.test(name)) { label = name; break; }
+  }
+  label = label || fallback;
+  labelCache.set(key, label);
+  return label;
+}
+function inZones(ms, seconds) {
+  ms = Number(ms);
+  const mainDate = zoneFmts[0].date.format(ms);
+  return zoneFmts.map((f, i) => {
+    const d = i === 0 ? mainDate : f.date.format(ms);
+    let s = (seconds ? f.secs : f.mins).format(ms) + " " + zoneLabel(f.zone, ms, d);
+    if (i > 0 && d !== mainDate) s += " (" + f.dm.format(ms) + ")";
+    return s;
+  }).join(" · ");
+}
+const time = (ms) => inZones(ms, true);
+const shortTime = (ms) => inZones(ms, false);
+const mainShortTime = (ms) => zoneFmts[0].mins.format(Number(ms));            // the narrow end-time column only
 function num(v) { const a = Math.abs(v); return (a >= 100 ? numFmt0 : a >= 1 ? numFmt1 : numFmt3).format(v); }
 function duration(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -63,8 +108,12 @@ function meter(s) {
     return { width: Math.min(1, Math.abs(pts) / 50), text: (pts > 0 ? "+" : "−") + num(Math.abs(pts)) + " pts" };
   }
   if (normal <= 0) return { width: 1, text: "new" };
-  const ratio = peak >= normal ? peak / normal : normal / Math.max(peak, 1e-9);
-  return { width: Math.min(1, Math.log10(ratio) / 2), text: (peak >= normal ? "" : "÷") + num(ratio) + "×" };   // 100× = full
+  if (peak < normal) {                                    // a drop: how far below normal, never a ratio over zero
+    const pct = Math.round((1 - peak / normal) * 100);    // (fix-false-drops design F4)
+    return { width: pct / 100, text: peak <= 0 ? "dropped to 0 (−100%)" : "−" + pct + "%" };
+  }
+  const ratio = peak / normal;
+  return { width: Math.min(1, Math.log10(ratio) / 2), text: num(ratio) + "×" };   // 100× = full
 }
 
 // ---- incoming lines -----------------------------------------------------------------------------------------
@@ -74,6 +123,7 @@ function onLine(text) {
     day = msg.day;
     dayByReceived = msg.day_by === "received";
     setZone(msg.time_zone);
+    if (msg.display_zones) setDisplayZones(msg.display_zones);
     replaceAll(staging);
     staging = null;
     caughtUp = true;
@@ -103,19 +153,19 @@ function flush() {
 
 /** Throws away the old list and shows a new snapshot, built off-screen in one DocumentFragment per list. */
 function replaceAll(snapshot) {
-  incidents.clear(); openIds.length = 0; closedIds.length = 0; groupCounts.clear(); longestMs = 0;
-  $("openList").textContent = ""; $("closedList").textContent = "";
+  incidents.clear(); openIds.length = 0; calmIds.length = 0; closedIds.length = 0; groupCounts.clear(); longestMs = 0;
+  $("openList").textContent = ""; $("calmList").textContent = ""; $("closedList").textContent = "";
   const views = [];
   for (const ev of (snapshot || new Map()).values()) { const v = makeView(ev); if (v) views.push(v); }
   views.sort((a, b) => order(a) - order(b));
-  const fo = document.createDocumentFragment(), fc = document.createDocumentFragment();
+  const frags = { openList: document.createDocumentFragment(), calmList: document.createDocumentFragment(), closedList: document.createDocumentFragment() };
   for (const v of views) {
     incidents.set(v.id, v);
-    (v.open ? openIds : closedIds).push(v.id);
+    idsOf(v).push(v.id);
     count(v, +1);
-    (v.open ? fo : fc).appendChild(v.row);
+    frags[listOf(v)].appendChild(v.row);
   }
-  $("openList").appendChild(fo); $("closedList").appendChild(fc);
+  for (const id in frags) $(id).appendChild(frags[id]);
   pending = new Map();
   refreshCounts(true);
   applyFilter();
@@ -138,6 +188,7 @@ function apply(ev, live) {
 function makeView(ev) {
   const inc = ev.incident || {};
   const open = inc.state !== "INCIDENT_STATE_CLOSED";
+  const calm = inc.state === "INCIDENT_STATE_CALM";
   const startMs = Number(inc.started_ms || 0), endMs = Number(inc.ended_ms || 0);
   if (!open && day && !dayByReceived && dayFmt.format(startMs) < day) return null;   // an older day's, now closed
   const series = inc.series || [];
@@ -145,12 +196,14 @@ function makeView(ev) {
   for (const s of series) { const c = colorOf(s); if (RANK[c] > RANK[color]) color = c; }
   const title = inc.title || ev.incident_id;
   const v = {
-    id: ev.incident_id, ev, seq: Number(ev.sequence), open, startMs, endMs, color, title,
+    id: ev.incident_id, ev, seq: Number(ev.sequence), open, calm, startMs, endMs, color, title, reason: inc.reason || "",
+    resolvedMs: Number(inc.resolved_ms || 0),
     label: title.lastIndexOf(": ") > 0 ? title.slice(0, title.lastIndexOf(": ")) : title,   // labels may contain ": "
-    search: (title + " " + series.map((s) => [s.signal, s.metric, s.panel_title, s.dashboard_title, ...Object.values(s.group_tags || {})].join(" ")).join(" ")).toLowerCase(),
+    search: (title + " " + series.map((s) => [s.signal, s.metric, s.panel_title, s.panel_path, s.dashboard_title, ...Object.values(s.group_tags || {})].join(" ")).join(" ")).toLowerCase(),
     expanded: false,
   };
   v.row = open ? openRow(v, inc, series) : closedRow(v);
+  if (!open && reasons.has(v.id)) { clearTimeout(reasons.get(v.id).timer); reasons.delete(v.id); drafts.delete(v.id); }
   return v;
 }
 
@@ -160,9 +213,11 @@ function openRow(v, inc, series) {
   row.dataset.id = v.id;
   const head = el("div", "inc-head");
   head.append(el("span", "title", v.title));
-  v.durEl = el("span", "when", "since " + time(v.startMs) + " · " + duration(Date.now() - v.startMs));
-  head.append(v.durEl, links(inc));
-  row.append(head, lines(series));
+  v.durEl = el("span", "when", v.calm
+    ? "calm since " + time(v.endMs) + " · lasted " + duration(v.endMs - v.startMs)
+    : "since " + time(v.startMs) + " · " + duration(Date.now() - v.startMs));
+  head.append(v.durEl);                       // no dashboard links on the page (add-incident-history H3)
+  row.append(head, lines(series, v.id), reasonBox(v));
   return row;
 }
 
@@ -170,42 +225,147 @@ function closedRow(v) {
   const row = el("div", "inc s-" + v.color);
   row.dataset.id = v.id;
   const head = el("div", "inc-head");
-  head.append(el("span", "endt", shortTime(v.endMs)), el("span", "title", v.title),
+  head.append(el("span", "endt", mainShortTime(v.endMs)), el("span", "title", v.title),
     el("span", "when", time(v.startMs) + " – " + time(v.endMs) + " · " + duration(v.endMs - v.startMs)), el("span", "chev", "▸"));
   row.append(head);
+  if (v.reason) row.append(el("div", "reason-shown", "Reason: " + v.reason + (v.resolvedMs ? " · given " + shortTime(v.resolvedMs) : "")));
   return row;                                 // details are built only when expanded (lazy)
 }
 
-function lines(series) {
-  const grid = el("div", "lines");
+// The affected lines as a small tree per incident (add-incident-history H3):
+//   view (dashboard · saved view) → panel group → panel → line tags · value · normal · change · ▸ history
+// One Map per level, in first-seen order: O(lines). Full text, wrapped; nothing is cut.
+function lines(series, incidentId) {
+  const tree = new Map();
   for (const s of series) {
-    const c = colorOf(s), m = meter(s);
-    const bar = el("div", "bar"), fill = el("div", "fill f-" + c);
-    fill.style.width = Math.max(4, Math.round(m.width * 100)) + "%";
-    bar.append(fill);
-    const meterEl = el("div", "meter"); meterEl.append(bar, el("span", "c-" + c, m.text));
-    grid.append(
-      el("span", "sig c-" + c, (s.signal || "line").replace("-", " ") + " " + (s.reason || "")),
-      el("span", "val", s.reason === "silent" ? "—" : withUnit(s.peak_value || 0, s.unit)),
-      el("span", "norm", "normal " + withUnit(s.normal_value || 0, s.unit)),
-      meterEl,
-      el("span", "panel", (s.panel_title || "") + (s.group_tags ? "  ·  " + Object.entries(s.group_tags).map(([k, x]) => k + "=" + x).join(", ") : "")));
+    const view = s.dashboard_title || "Dashboard", group = s.panel_path || "", panel = s.panel_title || "Panel";
+    if (!tree.has(view)) tree.set(view, new Map());
+    const groups = tree.get(view);
+    if (!groups.has(group)) groups.set(group, new Map());
+    const panels = groups.get(group);
+    if (!panels.has(panel)) panels.set(panel, []);
+    panels.get(panel).push(s);
   }
-  return grid;
-}
-
-function links(inc) {
-  const box = el("span", "links");
-  for (const l of inc.links || []) {
-    const a = el("a", null, "↗ " + l.label);
-    a.href = l.url; a.target = "_blank"; a.rel = "noopener";
-    box.append(a);
+  const box = el("div", "lines tree");
+  for (const [view, groups] of tree) {
+    box.append(el("div", "t-view", view));
+    for (const [group, panels] of groups) {
+      if (group) box.append(el("div", "t-group", group));
+      for (const [panel, list] of panels) {
+        box.append(el("div", group ? "t-panel" : "t-panel t-nogroup", panel));
+        for (const s of list) box.append(leaf(s, incidentId, group));
+      }
+    }
   }
   return box;
 }
 
+function leaf(s, incidentId, group) {
+  const c = colorOf(s), m = meter(s);
+  const row = el("div", group ? "t-line" : "t-line t-nogroup");
+  const bar = el("div", "bar"), fill = el("div", "fill f-" + c);
+  fill.style.width = Math.max(4, Math.round(m.width * 100)) + "%";
+  bar.append(fill);
+  const meterEl = el("div", "meter"); meterEl.append(bar, el("span", "c-" + c, m.text));
+  const tags = Object.entries(s.group_tags || {}).map(([k, x]) => k + "=" + x).join(", ") || s.metric || "";
+  const hist = el("button", "hist", "▸ history");
+  hist.dataset.line = s.series_id || ""; hist.dataset.incident = incidentId || "";
+  row.append(el("span", "tags", tags),
+    el("span", "sig c-" + c, (s.signal || "line").replace("-", " ") + " " + (s.reason || "")),
+    el("span", "val", s.reason === "silent" ? "—" : withUnit(s.peak_value || 0, s.unit)),
+    el("span", "norm", "normal " + withUnit(s.normal_value || 0, s.unit)),
+    meterEl, hist);
+  return row;
+}
+
+// ---- a line's past: GET /history, shown under the line (add-incident-history H4) ---------------------------
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".hist");
+  if (!b) return;
+  e.stopPropagation();
+  const line = b.closest(".t-line");
+  const shown = line.nextElementSibling && line.nextElementSibling.classList.contains("t-past") ? line.nextElementSibling : null;
+  if (shown) { shown.remove(); b.textContent = "▸ history"; return; }
+  b.textContent = "▾ history";
+  const box = el("div", "t-past", "loading…");
+  line.after(box);
+  try {
+    const r = await fetch("/history?line=" + encodeURIComponent(b.dataset.line) + "&before=" + encodeURIComponent(b.dataset.incident));
+    renderPast(box, await r.json());
+  } catch (err) { box.textContent = "history unavailable"; }
+});
+
+function renderPast(box, past) {
+  box.textContent = "";
+  const hours = Math.round((past.windowMs || 172800000) / 3600000);
+  const span = (o) => (o.endedMs && Number(o.endedMs) > 0 ? duration(Number(o.endedMs) - Number(o.startedMs)) : "running");
+  const when = (ms) => (dayFmt.format(Number(ms)) === day ? "today " : dayFmt.format(Number(ms)) + " ") + shortTime(Number(ms));
+  const desc = (o) => when(o.startedMs) + " · " + span(o) + " · " + withUnit(o.peak, o.unit) + " (normal " + withUnit(o.normal, o.unit) + ") · reason: " + (o.reason || "—");
+  box.append(el("div", "p-last", past.last ? "Last time before this: " + desc(past.last) : "No earlier incident in the last " + (hours === 48 ? "2 days" : hours + " h")));
+  if ((past.all || []).length) {
+    box.append(el("div", "p-head", "In the last " + (hours === 48 ? "2 days" : hours + " h") + " (" + past.all.length + "):"));
+    for (const o of past.all) box.append(el("div", "p-item", desc(o)));
+  }
+}
+
+// ---- closing with a reason (add-incident-resolution S5) ---------------------------------------------------
+// drafts: what was typed, kept when the row is rebuilt by a live update; reasons: sent and waiting for the closing event
+const drafts = new Map();
+const reasons = new Map();
+const MAX_REASON = 500;
+function reasonBox(v) {
+  const box = el("div", "reason-box");
+  box.dataset.id = v.id;
+  const input = el("textarea", "reason-in");
+  input.maxLength = MAX_REASON; input.rows = 1; input.placeholder = "Why did this happen? (needed to close it)";
+  input.value = drafts.get(v.id) || "";
+  const counter = el("span", "reason-count", input.value.length + "/" + MAX_REASON);
+  const send = el("button", "reason-send", "Close with reason");
+  const state = el("span", "reason-state", "");
+  const r = reasons.get(v.id);
+  if (r) { state.textContent = r.text; state.classList.toggle("bad", !!r.bad); }
+  box.append(input, counter, send, state);
+  return box;
+}
+function showReasonState(id, text, bad) {
+  const r = reasons.get(id) || {};
+  r.text = text; r.bad = bad; reasons.set(id, r);
+  const box = document.querySelector('.reason-box[data-id="' + CSS.escape(id) + '"]');
+  if (box) { const s = box.querySelector(".reason-state"); s.textContent = text; s.classList.toggle("bad", !!bad); }
+}
+document.addEventListener("input", (e) => {
+  if (!e.target.classList.contains("reason-in")) return;
+  const id = e.target.closest(".reason-box").dataset.id;
+  drafts.set(id, e.target.value);
+  e.target.parentElement.querySelector(".reason-count").textContent = e.target.value.length + "/" + MAX_REASON;
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && e.target.classList && e.target.classList.contains("reason-in")) {
+    e.preventDefault(); e.target.parentElement.querySelector(".reason-send").click();
+  }
+});
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".reason-send");
+  if (!b) return;
+  e.stopPropagation();
+  const id = b.closest(".reason-box").dataset.id;
+  const text = (drafts.get(id) || "").trim();
+  if (!text || text.length > MAX_REASON) { showReasonState(id, "a reason of 1 to " + MAX_REASON + " characters is needed", true); return; }
+  showReasonState(id, "saving…", false);
+  try {
+    const r = await fetch("/incidents/" + encodeURIComponent(id) + "/reason",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: text }) });
+    if (r.status === 202) { reasons.get(id).deadline = Date.now() + 10000; return; }   // the closing event clears it
+    const body = await r.json().catch(() => ({}));
+    showReasonState(id, "not saved: " + (body.problem || "HTTP " + r.status), true);
+  } catch (err) { showReasonState(id, "not saved: the Notifier cannot be reached", true); }
+});
+
 // ---- ordered lists: binary search, O(log n) to find, one DOM move ----------------------------------------
-const order = (v) => (v.open ? 0 : 1e15) - (v.open ? v.startMs : v.endMs);    // open first; newest first
+// open first (newest start), then calm (newest calm), then closed (newest end)
+const order = (v) => (!v.open ? 2e15 - v.endMs : v.calm ? 1e15 - v.endMs : -v.startMs);
+const idsOf = (v) => (!v.open ? closedIds : v.calm ? calmIds : openIds);
+const listOf = (v) => (!v.open ? "closedList" : v.calm ? "calmList" : "openList");
 function position(ids, v) {
   let lo = 0, hi = ids.length;
   const key = order(v);
@@ -213,15 +373,15 @@ function position(ids, v) {
   return lo;
 }
 function insertSorted(v) {
-  const ids = v.open ? openIds : closedIds;
+  const ids = idsOf(v);
   const at = position(ids, v);
-  const list = $(v.open ? "openList" : "closedList");
+  const list = $(listOf(v));
   const next = at < ids.length ? incidents.get(ids[at]).row : null;
   ids.splice(at, 0, v.id);
   list.insertBefore(v.row, next);
 }
 function remove(v) {
-  const ids = v.open ? openIds : closedIds;
+  const ids = idsOf(v);
   const at = ids.indexOf(v.id);                // the arrays hold at most a day's incidents
   if (at >= 0) ids.splice(at, 1);
   v.row.remove();
@@ -241,6 +401,8 @@ function refreshCounts(force) {
   countsDirty = false;
   $("cToday").textContent = incidents.size;
   $("cOpen").textContent = openIds.length;
+  $("hCalm").textContent = "(" + calmIds.length + ")";
+  $("calmSection").classList.toggle("hidden", calmIds.length === 0);
   $("cClosed").textContent = closedIds.length;
   $("cLongest").textContent = longestMs ? duration(longestMs) : "–";
   $("hOpen").textContent = openIds.length ? "(" + openIds.length + ")" : "";
@@ -266,20 +428,21 @@ function applyFilter() {
   for (const v of incidents.values()) v.row.classList.toggle("hidden", !!filterText && !v.search.includes(filterText));
 }
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input, textarea") && e.target !== $("filter")) return;   // typing a reason
   if (e.key === "/" && document.activeElement !== $("filter")) { e.preventDefault(); $("filter").focus(); }
   if (e.key === "Escape") { $("filter").value = ""; filterText = ""; applyFilter(); $("filter").blur(); }
 });
 
 // ---- one click listener for every row (event delegation); lazy details ---------------------------------
 $("closedList").addEventListener("click", (e) => {
-  if (e.target.closest("a") || e.target.closest(".lines")) return;
+  if (e.target.closest("a") || e.target.closest(".lines") || e.target.closest(".hist")) return;
   const row = e.target.closest(".inc");
   if (!row) return;
   const v = incidents.get(row.dataset.id);
   if (!v) return;
   v.expanded = !v.expanded;
   row.classList.toggle("expanded", v.expanded);
-  if (v.expanded) { v.detail = el("div"); v.detail.append(links(v.ev.incident), lines(v.ev.incident.series || [])); row.append(v.detail); }
+  if (v.expanded) { v.detail = el("div"); v.detail.append(lines(v.ev.incident.series || [], v.id)); row.append(v.detail); }
   else if (v.detail) { v.detail.remove(); v.detail = null; }       // freed when collapsed
 });
 $("groups").addEventListener("click", (e) => {
@@ -292,6 +455,7 @@ $("groups").addEventListener("click", (e) => {
 setInterval(() => {
   const now = Date.now();
   for (const id of openIds) { const v = incidents.get(id); v.durEl.textContent = "since " + time(v.startMs) + " · " + duration(now - v.startMs); }
+  for (const [id, r] of reasons) if (r.deadline && now > r.deadline) { r.deadline = 0; showReasonState(id, "not saved: no answer from the Detector yet (it will close when the Detector applies it, or send again)", true); }
   $("lastChange").textContent = lastChangeAt ? "last change " + duration(now - lastChangeAt) + " ago" : "";
 }, 1000);
 
@@ -366,9 +530,11 @@ window.__bench = async function (n = 2000, burst = 50) {
     incident: { incident_id: "bench-" + i, state: closed ? "INCIDENT_STATE_CLOSED" : "INCIDENT_STATE_OPEN",
       title: ["/v1/invoices", "billing", "orders", "upstream billing-core", "/v1/telemetry"][i % 5] + ": latency up, errors up",
       started_ms: String(t0 + i * 30000), ended_ms: closed ? String(t0 + i * 30000 + 180000) : undefined,
-      series: [{ series_id: "s" + i, metric: "lab.api.latency", unit: "ms", signal: "latency", reason: "up", peak_value: 1200 + i, normal_value: 138, panel_title: "Latencies", group_tags: { api: "/v1/invoices" } },
-        { series_id: "e" + i, metric: "lab.api.request.count", unit: "requests", signal: "errors", reason: "up", peak_value: 8, normal_value: 0, panel_title: "Count" }],
-      links: [{ label: "Lab: API platform", url: "https://app.datadoghq.com/dashboard/w2f-pqs-ghd" }] } });
+      series: [{ series_id: "s" + i, metric: "lab.api.latency", unit: "ms", signal: "latency", reason: "up", peak_value: 1200 + i, normal_value: 138,
+          dashboard_title: "Shop · Payments", panel_path: "API Metrics", panel_title: "Latencies",
+          group_tags: { api: i % 2 ? "/v1/invoices" : "/accounts/_accountid_/devices/_deviceid_/profiles/_profileid_/pause/schedules/_scheduleid_/exceptions/_exceptionid_/history" } },
+        { series_id: "e" + i, metric: "lab.api.request.count", unit: "requests", signal: "traffic", reason: "down", peak_value: 0, normal_value: 5,
+          dashboard_title: "Shop · Payments", panel_path: "API Gateway Metrics", panel_title: "Request Counts by Status Code", group_tags: { status: "200" } }] } });
   const snap = new Map();
   for (let i = 0; i < n; i++) snap.set("bench-" + i, make(i, 3, i < n - 5));
   const a = performance.now();

@@ -33,7 +33,15 @@ public final class AnswerTranslator {
     private final String system;
     private final String instance;
 
+    /** Steps that ended less than this before the answer arrived stay partial (fix-false-drops design F1). */
+    private final long settleMs;
+
     public AnswerTranslator(String system, String instance) {
+        this(system, instance, 0);
+    }
+
+    public AnswerTranslator(String system, String instance, long settleMs) {
+        this.settleMs = Math.max(0, settleMs);
         this.system = system;
         this.instance = instance;
     }
@@ -67,7 +75,8 @@ public final class AnswerTranslator {
                     .setTimeAggregation(timeAggregation(used))
                     .setStepSeconds((int) step.toSeconds());
             unit.views().forEach(v -> description.addViews(View.newBuilder()
-                    .setViewId(v.dashboardId()).setViewTitle(v.dashboardTitle()).setPanelTitle(v.panelTitle())));
+                    .setViewId(v.dashboardId()).setViewTitle(v.dashboardTitle()).setPanelTitle(v.panelTitle())
+                    .setPanelPath(v.path() == null ? "" : v.path())));               // add-incident-history H2
 
             List<Point> points = new ArrayList<>();
             for (int i = 0; i < answer.times().size() && i < series.values().size(); i++) {
@@ -77,7 +86,7 @@ public final class AnswerTranslator {
                 }
                 long start = answer.times().get(i);
                 points.add(Point.newBuilder().setTsMs(start).setValue(value)
-                        .setPartial(start + stepMs > answer.receivedMs()).build());
+                        .setPartial(start + stepMs + settleMs > answer.receivedMs()).build());
             }
             lines.add(new TranslatedLine(description, points, hasFormula,
                     !hasFormula && metrics.size() == 1 ? metrics.iterator().next() : null,

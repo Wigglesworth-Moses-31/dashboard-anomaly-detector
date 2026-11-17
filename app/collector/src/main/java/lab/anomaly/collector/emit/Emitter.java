@@ -23,6 +23,40 @@ public final class Emitter {
     private volatile MessageSink sink;
     private final int maxSteps;
     private final Map<String, LineState> lines = new ConcurrentHashMap<>();
+    private final Map<String, LateChanges> late = new ConcurrentHashMap<>();       // by source site
+
+    /**
+     * Finished steps that came back with another value, per source (fix-false-drops design F2): how many, and how long
+     * after the step's end the latest and the slowest arrived. O(1) per change.
+     */
+    public static final class LateChanges {
+        private final java.util.concurrent.atomic.AtomicLong count = new java.util.concurrent.atomic.AtomicLong();
+        private volatile long latestAfterMs;
+        private volatile long maxAfterMs;
+
+        synchronized void add(long afterMs) {
+            count.incrementAndGet();
+            latestAfterMs = afterMs;
+            maxAfterMs = Math.max(maxAfterMs, afterMs);
+        }
+
+        public long count() {
+            return count.get();
+        }
+
+        public long latestAfterMs() {
+            return latestAfterMs;
+        }
+
+        public long maxAfterMs() {
+            return maxAfterMs;
+        }
+    }
+
+    /** Late changes of one source (by site), or null when there were none. */
+    public LateChanges lateChanges(String site) {
+        return late.get(site);
+    }
 
     public Emitter(MessageSink sink, int maxSteps) {
         this.sink = sink;
@@ -60,6 +94,11 @@ public final class Emitter {
                     continue;
                 }
                 Double sent = state.sentFinished.get(point.getTsMs());
+                if (sent != null && Double.compare(sent, point.getValue()) != 0) {
+                    long stepMs = description.getStepSeconds() > 0 ? description.getStepSeconds() * 1000L : 10_000L;
+                    late.computeIfAbsent(description.getSource().getInstance(), k -> new LateChanges())
+                            .add(collectedMs - (point.getTsMs() + stepMs));
+                }
                 if (sent == null || Double.compare(sent, point.getValue()) != 0) {
                     state.sentFinished.put(point.getTsMs(), point.getValue());
                     fresh.addPoints(point);

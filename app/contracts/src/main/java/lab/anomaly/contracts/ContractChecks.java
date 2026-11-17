@@ -77,6 +77,27 @@ public final class ContractChecks {
     }
 
     /** Incident event: ids, type, sequence and a full incident whose id matches. */
+    /** Longest reason accepted (add-incident-resolution). */
+    public static final int MAX_REASON = 500;
+
+    /** A close command: ids present, a reason of 1 to {@value #MAX_REASON} characters. */
+    public static List<String> problems(lab.anomaly.contracts.v1.ResolveIncident message) {
+        List<String> problems = new ArrayList<>();
+        if (message.getCommandId().isBlank()) {
+            problems.add("command_id: missing");
+        }
+        if (message.getIncidentId().isBlank()) {
+            problems.add("incident_id: missing");
+        }
+        String reason = message.getReason().strip();
+        if (reason.isEmpty()) {
+            problems.add("reason: missing");
+        } else if (reason.length() > MAX_REASON) {
+            problems.add("reason: longer than " + MAX_REASON + " characters");
+        }
+        return problems;
+    }
+
     public static List<String> problems(IncidentEvent message) {
         List<String> problems = new ArrayList<>();
         if (message.getEventId().isBlank()) {

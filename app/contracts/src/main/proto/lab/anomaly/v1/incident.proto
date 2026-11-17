@@ -27,6 +27,17 @@ message Incident {
   repeated Link links = 7;              // dashboards at the incident's time window
   string group_key = 8;                 // added in add-detector: e.g. "api=/v1/invoices" or "dashboard=w2f-pqs-ghd"
   bool upstream = 9;                    // the group is an upstream service (a service being called)
+  string reason = 10;                   // added in add-incident-resolution: why it happened, given by a person; "" until closed
+  int64 resolved_ms = 11;               // when the reason was given (UTC milliseconds); 0 until closed
+}
+
+// A person's request to close an incident with its reason (add-incident-resolution). Topic incident-commands,
+// key = incident id. Only the Detector applies it; repeats change nothing.
+message ResolveIncident {
+  string command_id = 1;                // unique per request (UUID), for tracing
+  string incident_id = 2;
+  string reason = 3;                    // 1 to 500 characters
+  int64 requested_ms = 4;               // UTC milliseconds
 }
 
 message AffectedSeries {
@@ -41,6 +52,7 @@ message AffectedSeries {
   string reason = 9;                    // "up", "down" or "silent"
   string dashboard_title = 10;
   string panel_title = 11;
+  string panel_path = 12;               // added in add-incident-history: the panel's group or section, "" when none
 }
 
 message Link {
@@ -59,4 +71,5 @@ enum IncidentState {
   INCIDENT_STATE_UNSPECIFIED = 0;
   INCIDENT_STATE_OPEN = 1;
   INCIDENT_STATE_CLOSED = 2;
+  INCIDENT_STATE_CALM = 3;              // added in add-incident-resolution: all lines normal again, waiting for a reason
 }

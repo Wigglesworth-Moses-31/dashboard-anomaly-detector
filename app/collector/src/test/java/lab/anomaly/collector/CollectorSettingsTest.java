@@ -11,10 +11,10 @@ import java.util.Optional;
 import lab.anomaly.collector.CollectorSettings.ClassificationRule;
 import org.junit.jupiter.api.Test;
 
-class CollectorSettingsTest {
+public class CollectorSettingsTest {
 
     /** Valid settings, matching config-repo/collector.yml. */
-    static CollectorSettings valid() {
+    public static CollectorSettings valid() {
         return new CollectorSettings("datadog", "datadoghq.com", List.of(ref("dashboards/lab.json")),
                 Duration.ofSeconds(15), Duration.ofSeconds(10), Duration.ofMinutes(10), Duration.ofMinutes(2), Duration.ofMinutes(60),
                 Map.of("w2f-pqs-ghd", Map.of("env", "prod")),
@@ -35,6 +35,10 @@ class CollectorSettingsTest {
                 (Duration) a[5], (Duration) a[6], (Duration) a[7], (Map<String, Map<String, String>>) a[8],
                 (List<ClassificationRule>) a[9], (int) a[10], (double) a[11], (int) a[12], (Duration) a[13], (Duration) a[14],
                 (int) a[15], (Duration) a[16], (Duration) a[17], (int) a[18], (CollectorSettings.Recording) a[19], (String) a[20]);
+    }
+
+    public static List<String> problemsOf(CollectorSettings settings) {
+        return problems(settings);
     }
 
     private static List<String> problems(CollectorSettings settings) {

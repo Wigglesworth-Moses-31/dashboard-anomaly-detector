@@ -6,7 +6,7 @@
 # Dashboards are exported JSON files (Datadog: dashboard > Share > Export dashboard JSON).
 # Unattended: export SOURCES="us eu" and, per source, DD_<NAME>_API_KEY, DD_<NAME>_APP_KEY, DD_<NAME>_SITE,
 # DASHBOARD_FILES_<NAME>="a.json b.json" (paths without spaces), optionally PRESETS_<NAME>=all|none (saved views,
-# default all); plus TIME_ZONE. Interactive input accepts dragged paths with spaces.
+# default all); optionally TIME_ZONE (default UTC). Interactive input accepts dragged paths with spaces.
 # Keys are never printed, never passed on a command line, and stay in .env (git-ignored, readable by you only).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -186,12 +186,8 @@ PY2
     BLOCK="$BLOCK      - name: $name\n        site: $site\n        api-key-env: DD_${upper}_API_KEY\n        app-key-env: DD_${upper}_APP_KEY\n        dashboards:\n${ENTRIES[$i]}"
   done
 
-  zone="${TIME_ZONE:-}"
-  if [ -z "$zone" ]; then
-    guess="$(python3 -I -c 'import os; p=os.path.realpath("/etc/localtime"); print(p.split("zoneinfo/")[1] if "zoneinfo/" in p else "UTC")' 2>/dev/null || echo UTC)"
-    read -r -p "Time zone for 'today' on the page and in reports [$guess]: " zone
-    zone="${zone:-$guess}"
-  fi
+  # "Today" is the UTC day; times are shown in UTC, India and New York (application.yml, changeable later)
+  zone="${TIME_ZONE:-UTC}"
   python3 -I -c 'import sys, zoneinfo; zoneinfo.ZoneInfo(sys.argv[1])' "$zone" 2>/dev/null || fail "unknown time zone: $zone (use names like Asia/Kolkata, UTC, America/New_York)"
 
   cp -R "$ROOT/config-template" "$ROOT/config-repo"

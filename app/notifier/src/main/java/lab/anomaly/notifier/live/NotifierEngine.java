@@ -61,6 +61,14 @@ public class NotifierEngine {
         this.appliedSharedVersion = shared.snapshot().version();
     }
 
+    private final lab.anomaly.notifier.board.LineHistory history = new lab.anomaly.notifier.board.LineHistory();
+    private long nextSweepMs;
+
+    /** Every line's incidents of the last 2 days (add-incident-history). */
+    public lab.anomaly.notifier.board.LineHistory history() {
+        return history;
+    }
+
     public Hub hub() {
         return hub;
     }
@@ -141,17 +149,22 @@ public class NotifierEngine {
             return;
         }
         hub.apply(event, ContractJson.toJson(event), receivedMs);       // JSON made once, shared by every page
+        history.accept(event.getIncident());
     }
 
     /** Once a second: a new day, a new time zone or a new day rule means a fresh snapshot for every page. */
     private void checkDayAndSettings(long now) {
+        if (now >= nextSweepMs) {
+            history.sweep(now);                                          // drop incidents older than 2 days
+            nextSweepMs = now + 600_000;
+        }
         var n = settings.snapshot();
         var s = shared.snapshot();
         hub.setCap(n.value().maxQueuedUpdatesPerViewer());
         if (n.version() != appliedNotifierVersion || s.version() != appliedSharedVersion) {
             appliedNotifierVersion = n.version();
             appliedSharedVersion = s.version();
-            hub.reconfigure(ZoneId.of(s.value().timeZone()), n.value().byReceived(), now);
+            hub.reconfigure(ZoneId.of(s.value().timeZone()), n.value().byReceived(), now, s.value().displayTimeZones());
             log.info("Day {} in {} (day by {}): pages get a fresh snapshot", hub.day(), hub.zone(), n.value().dayBy());
             return;
         }

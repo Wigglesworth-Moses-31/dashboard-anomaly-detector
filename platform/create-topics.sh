@@ -21,6 +21,7 @@ create metric-series   3 cleanup.policy=compact
 create metric-points   6 retention.ms=$TWO_DAYS_MS
 # Incident opened / updated / closed
 create incident-events 3 retention.ms=$TWO_DAYS_MS
+create incident-commands 1 retention.ms=$TWO_DAYS_MS
 # Spring Cloud Bus: carries "settings changed, reload" to every service (design D5)
 create springCloudBus  1
 docker exec anomaly-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list

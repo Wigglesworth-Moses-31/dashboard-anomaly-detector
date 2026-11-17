@@ -51,7 +51,22 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 .lines { margin-top: 8px; display: grid; grid-template-columns: minmax(110px, auto) minmax(90px, auto) minmax(110px, auto) 150px 1fr; gap: 4px 14px; align-items: center; }
 .lines .sig { font-weight: 550; } .lines .val { font-variant-numeric: tabular-nums; text-align: right; }
 .lines .norm { color: var(--muted); font-variant-numeric: tabular-nums; }
-.lines .panel { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lines .panel { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+/* add-incident-history: the tree view → group → panel → line; full text, wrapped, never cut */
+.tree { display: block; margin-top: 8px; }
+.tree .t-view { font-weight: 600; margin-top: 6px; overflow-wrap: anywhere; }
+.tree .t-group { margin-left: 14px; color: var(--muted); font-weight: 550; overflow-wrap: anywhere; }
+.tree .t-panel { margin-left: 28px; overflow-wrap: anywhere; }
+.tree .t-panel.t-nogroup { margin-left: 14px; }
+.tree .t-line { margin-left: 42px; display: grid; grid-template-columns: minmax(140px, 1.4fr) minmax(100px, auto) minmax(80px, auto) minmax(110px, auto) 170px auto;
+  gap: 4px 12px; align-items: center; padding: 2px 0; }
+.tree .t-line.t-nogroup { margin-left: 28px; }
+.tree .t-line .tags { overflow-wrap: anywhere; font-size: 12px; }
+.tree .t-line .val { font-variant-numeric: tabular-nums; text-align: right; }
+.tree .t-line .norm { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tree .hist { background: none; border: 1px solid var(--border, #444); color: var(--muted); border-radius: 6px; font-size: 11px; padding: 1px 6px; cursor: pointer; }
+.tree .t-past { margin: 2px 0 6px 56px; font-size: 12px; color: var(--muted); border-left: 2px solid var(--meter-bg); padding-left: 10px; }
+.tree .t-past .p-last { color: inherit; font-weight: 550; } .tree .t-past .p-head { margin-top: 4px; }
 .meter { display: flex; align-items: center; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .meter .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--meter-bg); overflow: hidden; }
 .meter .fill { height: 100%; background: var(--grey); }
@@ -73,5 +88,20 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 @media (max-width: 700px) {
   .top { flex-wrap: wrap; } .conn { margin-left: 0; }
   .lines { grid-template-columns: 1fr 1fr; } .lines .panel, .lines .meter { grid-column: span 2; }
+  .tree .t-line { grid-template-columns: 1fr 1fr; margin-left: 14px; } .tree .t-line .tags, .tree .t-line .meter { grid-column: span 2; }
+  .tree .t-past { margin-left: 14px; }
   #filter { width: 140px; }
 }
+
+/* add-incident-resolution: waiting for a reason, the reason box, the reason on closed rows */
+#calmSection.hidden { display: none; }
+.calm-note { font-size: 12px; margin: -4px 0 8px; }
+#calmList .inc { border-left-color: var(--amber, #c9a227); }
+.reason-box { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; flex-wrap: wrap; }
+.reason-in { flex: 1 1 260px; min-height: 30px; resize: vertical; background: var(--meter-bg); color: inherit;
+  border: 1px solid var(--border, #444); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
+.reason-count { color: var(--muted); font-size: 11px; align-self: center; }
+.reason-send { background: var(--blue, #4c8dff); color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+.reason-state { font-size: 12px; color: var(--muted); align-self: center; }
+.reason-state.bad { color: var(--red, #e5534b); }
+.reason-shown { font-size: 12px; color: var(--muted); margin: 4px 0 0 2px; overflow-wrap: anywhere; }

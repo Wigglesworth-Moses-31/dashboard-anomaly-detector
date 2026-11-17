@@ -65,15 +65,16 @@ public class IncidentRepository {
                 }
                 Incident i = c.incident();
                 boolean closed = i.getState() == IncidentState.INCIDENT_STATE_CLOSED;
-                jdbc.update(UPSERT_INCIDENT, i.getIncidentId(), i.getGroupKey(), closed ? "CLOSED" : "OPEN", i.getTitle(),
-                        ts(i.getStartedMs()), closed ? ts(i.getEndedMs()) : null, c.sequence(), i.toByteArray());
+                String state = closed ? "CLOSED" : i.getState() == IncidentState.INCIDENT_STATE_CALM ? "CALM" : "OPEN";
+                jdbc.update(UPSERT_INCIDENT, i.getIncidentId(), i.getGroupKey(), state, i.getTitle(),
+                        ts(i.getStartedMs()), i.getEndedMs() > 0 ? ts(i.getEndedMs()) : null, c.sequence(), i.toByteArray());
                 jdbc.update(INSERT_OUTBOX, UUID.fromString(event.getEventId()), i.getIncidentId(), event.toByteArray(), c.arrivedMs());
             }
         });
     }
 
     public List<Restored> openIncidents() {
-        return jdbc.query("SELECT body, sequence FROM incidents.incident WHERE state = 'OPEN' ORDER BY started",
+        return jdbc.query("SELECT body, sequence FROM incidents.incident WHERE state IN ('OPEN', 'CALM') ORDER BY started",
                 (rs, n) -> {
                     try {
                         return new Restored(Incident.parseFrom(rs.getBytes(1)), rs.getLong(2));

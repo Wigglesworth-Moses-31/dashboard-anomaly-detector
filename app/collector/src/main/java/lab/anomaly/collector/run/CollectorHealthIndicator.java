@@ -70,6 +70,15 @@ public class CollectorHealthIndicator implements HealthIndicator {
         d.put("sourceLimit", f.lastLimit());
         long gate = f.gate().waitMs(now);
         d.put("pausedForMs", gate);
+        lab.anomaly.collector.emit.Emitter.LateChanges late = engine.lateChanges(lane.config().site());
+        long settleMs = engine.settleDelayMs();
+        d.put("lateChanges", late == null ? 0 : late.count());
+        d.put("latestChangeAfterSeconds", late == null ? null : late.latestAfterMs() / 1000.0);
+        d.put("maxChangeAfterSeconds", late == null ? null : late.maxAfterMs() / 1000.0);
+        if (late != null && late.latestAfterMs() > settleMs) {
+            warnings.add(lane.name() + ": values still changed " + Math.round(late.latestAfterMs() / 1000.0)
+                    + " s after their step, longer than settle-delay (" + settleMs / 1000 + " s): raise settle-delay");
+        }
         Map<String, String> unreadable = lane.discovery().unreadable();
         d.put("unreadableDashboards", unreadable);
         Map<String, String> open = engine.openBreakers(lane);

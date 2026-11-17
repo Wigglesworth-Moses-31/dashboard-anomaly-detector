@@ -57,12 +57,15 @@ class IncidentReportTest {
     @Test
     void theTableIsOldestFirstAndEachIncidentHasItsEvidence() {
         String md = render(incidents(), null);
-        assertThat(md.indexOf("| 16:56:00 | 16:59:50 | 3 min |")).isLessThan(md.indexOf("| 17:04:00 | 17:07:00 | 3 min |"));
-        assertThat(md).contains("| 23:58:00 | open | – |");
+        // Times in the display zones (add-display-time-zones): 16:56 IST is 11:26 UTC and 06:26 EST
+        assertThat(md.indexOf("| 11:26:00 UTC · 16:56:00 IST · 06:26:00 EST | 11:29:50 UTC · 16:59:50 IST · 06:29:50 EST | 3 min |"))
+                .isPositive()
+                .isLessThan(md.indexOf("| 11:34:00 UTC · 17:04:00 IST · 06:34:00 EST | 11:37:00 UTC · 17:07:00 IST · 06:37:00 EST | 3 min |"));
+        assertThat(md).contains("| 18:28:00 UTC · 23:58:00 IST · 13:28:00 EST | open | – |");
         assertThat(md).contains("| latency up | 1,569 ms | 138 ms | 11.4× | Latencies (api=/v1/invoices) |");
         assertThat(md).contains("| errors up | 8.0 | 0 | new | Count (api=/v1/invoices) |");
         assertThat(md).contains("| success rate down | 74.0% | 99.0% | −25.0 pts | Success Rates (api=/v1/invoices) |");
-        assertThat(md).contains("[Lab: API platform at 16:56](https://app.datadoghq.com/dashboard/w2f-pqs-ghd?from_ts=1&to_ts=2)");
+        assertThat(md).contains("[Lab: API platform at 11:26 UTC · 16:56 IST · 06:26 EST](https://app.datadoghq.com/dashboard/w2f-pqs-ghd?from_ts=1&to_ts=2)");
     }
 
     @Test

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Tasks 3.2, 3.3 and 4.1: the spec's judging, silence and grouping scenarios on the detection core, with the real
- * default settings from config-repo/detector.yml. Times are data times (10-second steps), never the clock.
+ * default settings from config-template/detector.yml. Times are data times (10-second steps), never the clock.
  */
 class DetectorScenariosTest {
 
@@ -71,6 +71,11 @@ class DetectorScenariosTest {
 
     private List<Change> of(EventType type) {
         return changes.stream().filter(c -> c.type() == type).toList();
+    }
+
+    /** Changes that made an incident calm (add-incident-resolution: calm, not closed, until a reason is given). */
+    private List<Change> calmed() {
+        return changes.stream().filter(c -> c.incident().getState() == lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_CALM).toList();
     }
 
     private static final int WARM = 90;                  // 15 minutes of history, more than min-history (10 min)
@@ -244,7 +249,8 @@ class DetectorScenariosTest {
         long firstCalm = t + 2 * STEP;
         normal(inv, firstCalm, 13, 138);                           // 130 s calm
         assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
-        assertThat(of(EventType.EVENT_TYPE_CLOSED)).singleElement().satisfies(c -> {
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).as("nothing closes without a reason").isEmpty();
+        assertThat(calmed()).singleElement().satisfies(c -> {
             assertThat(c.incident().getEndedMs()).isEqualTo(firstCalm);
             assertThat(c.incident().getSeries(0).getPeakValue()).isEqualTo(1300.0);
         });
@@ -266,14 +272,16 @@ class DetectorScenariosTest {
         value(lat, t, 600);
         value(lat, t + STEP, 600);
         normal(lat, t + 2 * STEP, 14, 60);
-        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+        assertThat(calmed()).hasSize(1);
         // Line 2's values from the same moments arrive later: it spiked 20 s after line 1 started.
         normal(p95, t, 2, 60);
         value(p95, spike + 2 * STEP, 600);
         value(p95, spike + 3 * STEP, 600);
-        assertThat(of(EventType.EVENT_TYPE_OPENED)).as("no second incident").hasSize(1);
+        // The calm incident opens again: announced as OPENED (pages notify, the problem is back), the same incident
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getIncidentId()).as("no second incident")
+                .containsOnly(of(EventType.EVENT_TYPE_OPENED).get(0).incident().getIncidentId());
         Change last = changes.get(changes.size() - 1);
-        assertThat(last.type()).isEqualTo(EventType.EVENT_TYPE_UPDATED);
+        assertThat(last.incident().getIncidentId()).isEqualTo(of(EventType.EVENT_TYPE_OPENED).get(0).incident().getIncidentId());
         assertThat(last.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_OPEN);
         assertThat(last.incident().getSeriesCount()).isEqualTo(2);
     }
@@ -284,7 +292,7 @@ class DetectorScenariosTest {
         long t = normal(inv, T0, WARM, 138);
         normal(inv, t, 6 * 60, 800);                               // an hour at a new level
         assertThat(of(EventType.EVENT_TYPE_OPENED)).hasSize(1);
-        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+        assertThat(calmed()).hasSize(1);
     }
 
     // ---- silence ----------------------------------------------------------------------------------------------
@@ -456,7 +464,7 @@ class DetectorScenariosTest {
         detector.configure(Fixtures.holderEdited(text -> text.replace("group-by: [api,", "group-by: [endpoint, api,")).get(), 2);
         t = normal(a, t, 14, 100);                                 // calm: the first incident closes
         normal(b, t - 14 * STEP, 14, 100);
-        assertThat(of(EventType.EVENT_TYPE_CLOSED)).hasSize(1);
+        assertThat(calmed()).hasSize(1);
         changes.clear();
         for (int i = 0; i < 2; i++) {
             value(a, t, 900);
@@ -493,7 +501,7 @@ class DetectorScenariosTest {
             after.addAll(restarted.accept(inv.getSeriesId(), t + (2 + i) * STEP, 138, false, 0));
         }
         assertThat(after).singleElement().satisfies(c -> {
-            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_CLOSED);
+            assertThat(c.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_CALM);
             assertThat(c.incident().getIncidentId()).isEqualTo(opened.incident().getIncidentId());
             assertThat(c.sequence()).isEqualTo(opened.sequence() + 1);
         });
@@ -542,5 +550,143 @@ class DetectorScenariosTest {
         value(inv, t + STEP, 1213);
         assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getTitle())
                 .containsExactly("/v1/invoices: latency up");
+    }
+
+    // ---- fix-false-drops (design F3): error counts tagged "status" ---------------------------------------------
+
+    @Test
+    void fewer404sOpenNothing() {
+        SeriesDescriptor notFound = add(count("aaaa000000000404", Map.of("status", "404"), "Request Counts by Status Code"));
+        long t = normal(notFound, T0, WARM, 13);
+        for (int i = 0; i < 6; i++) {
+            value(notFound, t, 0);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).isEmpty();
+    }
+
+    @Test
+    void more500sOpenErrorsUp() {
+        SeriesDescriptor serverError = add(count("aaaa000000000500", Map.of("status", "500"), "Request Counts by Status Code"));
+        long t = normal(serverError, T0, WARM, 2);
+        for (int i = 0; i < 4; i++) {
+            value(serverError, t, 40);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getSeriesList()).singleElement()
+                        .satisfies(s -> assertThat(s.getSignal() + " " + s.getReason()).isEqualTo("errors up")));
+    }
+
+    // ---- add-incident-history task 2.2 ---------------------------------------------------------------------
+
+    @Test
+    void incidentsKeepEachLinesPanelGroup() {
+        SeriesDescriptor base = latency("ffff000000000001", "/v1/invoices");
+        SeriesDescriptor grouped = add(base.toBuilder().setViews(0, base.getViews(0).toBuilder().setPanelPath("API Metrics")).build());
+        long t = normal(grouped, T0, WARM, 138);
+        value(grouped, t, 1213);
+        value(grouped, t + STEP, 1213);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement().satisfies(c -> assertThat(c.incident().getSeries(0))
+                .satisfies(s -> {
+                    assertThat(s.getPanelPath()).isEqualTo("API Metrics");
+                    assertThat(s.getPanelTitle()).isEqualTo("Latencies");
+                }));
+    }
+
+    // ---- add-incident-resolution: calm, a reason closes, re-announce --------------------------------------------
+
+    /** An incident on /v1/invoices latency that is calm after 2 normal minutes; returns the time after it. */
+    private long calmIncident(SeriesDescriptor inv) {
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1213);
+        return normal(inv, t + 2 * STEP, 14, 138);
+    }
+
+    @Test
+    void aCalmIncidentWaitsAndASpikeAnHourLaterIsTheSameIncident() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = calmIncident(inv);
+        String id = calmed().get(0).incident().getIncidentId();
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).isEmpty();
+        t = normal(inv, t, 360, 138);                                   // an hour of normal values
+        value(inv, t, 1300);
+        value(inv, t + STEP, 1300);
+        Change back = changes.get(changes.size() - 1);
+        assertThat(back.type()).isEqualTo(EventType.EVENT_TYPE_OPENED);
+        assertThat(back.incident().getIncidentId()).isEqualTo(id);
+        assertThat(back.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_OPEN);
+        assertThat(back.incident().getEndedMs()).isZero();
+    }
+
+    @Test
+    void aReasonClosesACalmIncidentAndTheNextSpikeIsANewOne() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = calmIncident(inv);
+        String id = calmed().get(0).incident().getIncidentId();
+        List<Change> closed = detector.resolve(id, "  certificate renewal on the gateway ", 1_794_900_000_000L);
+        assertThat(closed).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_CLOSED);
+            assertThat(c.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_CLOSED);
+            assertThat(c.incident().getReason()).isEqualTo("certificate renewal on the gateway");
+            assertThat(c.incident().getResolvedMs()).isEqualTo(1_794_900_000_000L);
+            assertThat(c.incident().getEndedMs()).isPositive();
+        });
+        assertThat(detector.resolve(id, "again", 1_794_900_001_000L)).as("the same command twice: closed once").isEmpty();
+        changes.addAll(closed);
+        value(inv, t, 1300);
+        value(inv, t + STEP, 1300);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).extracting(c -> c.incident().getIncidentId()).hasSize(2).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void aReasonClosesAnOpenIncidentAtOnceAndBadRequestsChangeNothing() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = normal(inv, T0, WARM, 138);
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1213);
+        String id = of(EventType.EVENT_TYPE_OPENED).get(0).incident().getIncidentId();
+        assertThat(detector.resolve(id, "   ", 1L)).isEmpty();
+        assertThat(detector.resolve(id, "x".repeat(501), 1L)).isEmpty();
+        assertThat(detector.resolve("no-such-incident", "why", 1L)).isEmpty();
+        assertThat(detector.resolve(id, "test environment switched off", 2L)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getReason()).isEqualTo("test environment switched off"));
+    }
+
+    @Test
+    void waitingIncidentsAreAnnouncedAgainEveryTwelveHours() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        calmIncident(inv);
+        Change calm = calmed().get(0);
+        assertThat(detector.reannounce(calm.arrivedMs() + 3_600_000, 12 * 3_600_000L)).isEmpty();
+        assertThat(detector.reannounce(calm.arrivedMs() + 12 * 3_600_000L, 12 * 3_600_000L)).singleElement().satisfies(c -> {
+            assertThat(c.incident().getIncidentId()).isEqualTo(calm.incident().getIncidentId());
+            assertThat(c.incident().getState()).isEqualTo(lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_CALM);
+            assertThat(c.sequence()).isEqualTo(calm.sequence() + 1);
+        });
+    }
+
+    @Test
+    void aCalmIncidentIsRestoredAfterARestartAndCanStillOpenAgain() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = calmIncident(inv);
+        Change calm = calmed().get(0);
+        Detector restarted = new Detector(() -> "inc-new");
+        restarted.configure(Fixtures.defaults(), 1);
+        restarted.restore(calm.incident(), calm.sequence());
+        restarted.describe(inv);
+        double[] values = new double[WARM];
+        long[] times = new long[WARM];
+        for (int i = 0; i < WARM; i++) {
+            times[i] = t - (WARM - i) * STEP;
+            values[i] = 138;
+        }
+        restarted.warm(inv.getSeriesId(), times, values);
+        List<Change> after = new ArrayList<>();
+        after.addAll(restarted.accept(inv.getSeriesId(), t, 1300, false, t));
+        after.addAll(restarted.accept(inv.getSeriesId(), t + STEP, 1300, false, t + STEP));
+        assertThat(after).filteredOn(c -> c.type() == EventType.EVENT_TYPE_OPENED).singleElement()
+                .satisfies(c -> assertThat(c.incident().getIncidentId()).isEqualTo(calm.incident().getIncidentId()));
     }
 }

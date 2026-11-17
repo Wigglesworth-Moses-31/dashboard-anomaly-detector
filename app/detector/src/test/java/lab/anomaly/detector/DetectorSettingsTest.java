@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/** Task 1.2: the real config-repo/detector.yml is valid, and bad values are rejected with a reason. */
+/** Task 1.2: the shipped config-template/detector.yml is valid, and bad values are rejected with a reason. */
 class DetectorSettingsTest {
 
     @Test

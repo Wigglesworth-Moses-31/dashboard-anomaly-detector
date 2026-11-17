@@ -116,7 +116,7 @@ public class ReportScheduler {
 
     private void runOne(ReportWindow w, long nowMs) {
         try {
-            var step = new ReportJob(sources, state(), dir()).run(w, settings.get().keepBeforeEnd().toMillis(), nowMs);
+            var step = new ReportJob(sources, state(), dir(), shared.get().displayZones()).run(w, settings.get().keepBeforeEnd().toMillis(), nowMs);
             lastReport = w.fileName() + " (" + step.name().toLowerCase() + ")";
             lastError = "";
         } catch (IOException | RuntimeException e) {

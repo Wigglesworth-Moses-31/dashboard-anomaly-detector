@@ -96,7 +96,10 @@ Two things about the JSON form (both are Protobuf's standard JSON rules):
 Carries the incident's full current state, so a viewer needs only the latest event. `event_id` identifies
 a duplicate delivery; `sequence` lets a reader ignore an older event that arrives late.
 Added by add-detector (additions only): per line `signal` (errors, traffic, success-rate, error-rate, latency,
-saturation, general), `reason` (up, down, silent), `dashboard_title`, `panel_title`; per incident `group_key`
+saturation, general), `reason` (up, down, silent), `dashboard_title`, `panel_title`, `panel_path` (the panel's group or
+section, add-incident-history); per incident `group_key`, `reason` and `resolved_ms` (add-incident-resolution: the reason given
+when closing, and when; state `INCIDENT_STATE_CALM` = all lines normal again, waiting for a reason). Topic `incident-commands`
+carries `ResolveIncident` (command id, incident id, reason of 1–500 characters), read only by the Detector
 (what the lines have in common, e.g. `api=/v1/invoices`) and `upstream` (the group is a service being called).
 
 <!-- example: incident-event -->

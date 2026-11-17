@@ -52,6 +52,16 @@ public final class Detector {
         book.configure(s.groupBy(), s.upstreamTags(), s.calmPeriod().toMillis());
     }
 
+    /** A person's reason closes an incident (add-incident-resolution S3). */
+    public List<Change> resolve(String incidentId, String reason, long arrivedMs) {
+        return book.resolve(incidentId, reason, arrivedMs);
+    }
+
+    /** Open and calm incidents not announced for a while, announced again (S4). */
+    public List<Change> reannounce(long arrivedMs, long everyMs) {
+        return book.reannounce(arrivedMs, everyMs);
+    }
+
     public void describe(SeriesDescriptor d) {
         LineFacts f = LineFacts.of(d);
         book.noteSite(f.site());                     // sites are known from descriptions, before any spike (M9)

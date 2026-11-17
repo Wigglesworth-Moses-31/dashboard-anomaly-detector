@@ -36,7 +36,7 @@ public final class IncidentBook {
     private final Supplier<String> ids;
     private final Map<String, Open> byGroup = new LinkedHashMap<>();
     private final Map<String, Open> bySeries = new HashMap<>();
-    private final Map<String, Open> recentlyClosed = new HashMap<>();   // group key -> its last closed incident
+    private final Map<String, Open> calm = new HashMap<>();             // group key -> calm incident waiting for a reason
     private long calmMs = 120_000;
     private List<String> groupBy = List.of();
     private Set<String> upstreamTags = Set.of();
@@ -106,22 +106,20 @@ public final class IncidentBook {
         Group group = groupOf(line.facts());
         Open open = byGroup.get(group.key());
         boolean opened = false;
-        boolean reopened = false;
         if (open == null) {
-            // Lines of one group are read in data-time order per line only, so a line can report a spike from a
-            // moment before its group's incident was closed by another line's later values. A spike that starts
-            // within one calm period of the close belongs to that incident: reopen it instead of opening another.
-            Open closed = recentlyClosed.get(group.key());
-            if (closed != null && line.spikeStart() <= closed.endedMs + calmMs) {
-                open = closed;
-                recentlyClosed.remove(group.key());
+            // A calm incident of this group is the same problem back (add-incident-resolution S2): it opens again, with
+            // no time limit, until a reason closes it. This also covers lines of one problem read out of order (a
+            // spike that started before another line's calm values closed the group). Announced as OPENED again.
+            Open waiting = calm.remove(group.key());
+            if (waiting != null) {
+                open = waiting;
+                open.state = IncidentState.INCIDENT_STATE_OPEN;
                 open.endedMs = 0;
-                open.members.values().forEach(x -> bySeries.put(x.seriesId, closed));
-                reopened = true;
+                open.members.values().forEach(x -> bySeries.put(x.seriesId, waiting));
             } else {
                 open = new Open(ids.get(), group, line.spikeStart(), this::multiSite);
-                opened = true;
             }
+            opened = true;
             byGroup.put(group.key(), open);
         }
         Member m = open.members.get(line.facts().seriesId());
@@ -140,7 +138,7 @@ public final class IncidentBook {
         m.peakTs = line.peakTs();
         m.announcedPeak = m.peak;
         bySeries.put(line.facts().seriesId(), open);
-        if (opened || newMember || reopened) {
+        if (opened || newMember) {
             open.lastUpdateTs = ts;
             open.dirty = false;
             return List.of(open.change(opened ? EventType.EVENT_TYPE_OPENED : EventType.EVENT_TYPE_UPDATED, ts, arrivedMs));
@@ -204,8 +202,73 @@ public final class IncidentBook {
         open.endedMs = ended;
         byGroup.remove(open.group.key());
         open.members.keySet().forEach(bySeries::remove);
-        recentlyClosed.put(open.group.key(), open);
-        return List.of(open.change(EventType.EVENT_TYPE_CLOSED, line.lastTs(), arrivedMs));
+        // Calm, not closed: it waits for a reason (add-incident-resolution S2)
+        open.state = IncidentState.INCIDENT_STATE_CALM;
+        calm.put(open.group.key(), open);
+        return List.of(open.change(EventType.EVENT_TYPE_UPDATED, line.lastTs(), arrivedMs));
+    }
+
+    // ---- closing by a reason (add-incident-resolution S3) -------------------------------------------------------
+
+    /**
+     * Closes an open or calm incident with a person's reason (1 to 500 characters). Unknown, already closed and
+     * invalid requests change nothing, so a repeated command is harmless. O(incidents waiting) to find it.
+     */
+    public List<Change> resolve(String incidentId, String reason, long arrivedMs) {
+        String why = reason == null ? "" : reason.strip();
+        if (why.isEmpty() || why.length() > lab.anomaly.contracts.ContractChecks.MAX_REASON) {
+            return List.of();
+        }
+        Open target = null;
+        for (Open o : byGroup.values()) {
+            if (o.id.equals(incidentId)) {
+                target = o;
+            }
+        }
+        for (Open o : calm.values()) {
+            if (o.id.equals(incidentId)) {
+                target = o;
+            }
+        }
+        if (target == null) {
+            return List.of();
+        }
+        byGroup.remove(target.group.key(), target);
+        calm.remove(target.group.key(), target);
+        for (String id : target.members.keySet()) {
+            if (bySeries.get(id) == target) {
+                bySeries.remove(id);
+            }
+        }
+        if (target.endedMs == 0) {
+            target.endedMs = target.lastUpdateTs;          // closed while open: it ends at its latest data
+        }
+        target.state = IncidentState.INCIDENT_STATE_CLOSED;
+        target.reason = why;
+        target.resolvedMs = arrivedMs;
+        return List.of(target.change(EventType.EVENT_TYPE_CLOSED, target.endedMs, arrivedMs));
+    }
+
+    /** Open and calm incidents not announced for {@code everyMs} are announced again (S4). O(waiting). */
+    public List<Change> reannounce(long arrivedMs, long everyMs) {
+        List<Change> out = new ArrayList<>();
+        for (Open o : waiting()) {
+            if (arrivedMs - o.lastAnnouncedMs >= everyMs) {
+                out.add(o.change(EventType.EVENT_TYPE_UPDATED, o.state == IncidentState.INCIDENT_STATE_OPEN ? o.lastUpdateTs : o.endedMs, arrivedMs));
+            }
+        }
+        return out;
+    }
+
+    private List<Open> waiting() {
+        List<Open> all = new ArrayList<>(byGroup.values());
+        all.addAll(calm.values());
+        return all;
+    }
+
+    /** Calm incidents waiting for a reason (for health and tests). */
+    public int calmCount() {
+        return calm.size();
     }
 
     // ---- restart ----------------------------------------------------------------------------------------------
@@ -223,15 +286,26 @@ public final class IncidentBook {
         Open open = new Open(incident.getIncidentId(), group, incident.getStartedMs(), this::multiSite);
         open.sequence = sequence;
         open.lastUpdateTs = incident.getStartedMs();
+        open.lastAnnouncedMs = System.currentTimeMillis();      // it was announced before the restart
         for (Link link : incident.getLinksList()) {
             open.links.put(link.getLabel(), link);
         }
+        boolean isCalm = incident.getState() == IncidentState.INCIDENT_STATE_CALM;
         for (AffectedSeries s : incident.getSeriesList()) {
             Member m = new Member(s);
+            m.calmed = isCalm;
             open.members.put(s.getSeriesId(), m);
-            bySeries.put(s.getSeriesId(), open);
+            if (!isCalm) {
+                bySeries.put(s.getSeriesId(), open);
+            }
         }
-        byGroup.put(group.key(), open);
+        if (isCalm) {                                           // waiting for a reason (S2)
+            open.state = IncidentState.INCIDENT_STATE_CALM;
+            open.endedMs = incident.getEndedMs();
+            calm.put(group.key(), open);
+        } else {
+            byGroup.put(group.key(), open);
+        }
     }
 
     private static String labelOf(Incident incident) {
@@ -254,8 +328,8 @@ public final class IncidentBook {
 
     public List<Incident> openIncidents() {
         List<Incident> out = new ArrayList<>();
-        for (Open o : byGroup.values()) {
-            out.add(o.toProto(IncidentState.INCIDENT_STATE_OPEN, o.lastUpdateTs));
+        for (Open o : waiting()) {
+            out.add(o.toProto(o.state, o.lastUpdateTs));
         }
         return out;
     }
@@ -269,6 +343,7 @@ public final class IncidentBook {
         final String unit;
         final String dashboardTitle;
         final String panelTitle;
+        final String panelPath;                                         // add-incident-history H2
         String signal = "";
         String reason = "";
         double normal = Double.NaN;
@@ -285,6 +360,7 @@ public final class IncidentBook {
             unit = f.unit();
             dashboardTitle = f.primaryView().getViewTitle();
             panelTitle = f.primaryView().getPanelTitle();
+            panelPath = f.primaryView().getPanelPath();
         }
 
         Member(AffectedSeries s) {
@@ -294,6 +370,7 @@ public final class IncidentBook {
             unit = s.getUnit();
             dashboardTitle = s.getDashboardTitle();
             panelTitle = s.getPanelTitle();
+            panelPath = s.getPanelPath();
             signal = s.getSignal();
             reason = s.getReason();
             normal = s.getNormalValue();
@@ -306,7 +383,7 @@ public final class IncidentBook {
             return AffectedSeries.newBuilder().setSeriesId(seriesId).setMetric(metric).putAllGroupTags(tags)
                     .setPeakValue(Double.isNaN(peak) ? 0 : peak).setPeakTsMs(peakTs)
                     .setNormalValue(Double.isNaN(normal) ? 0 : normal).setUnit(unit).setSignal(signal).setReason(reason)
-                    .setDashboardTitle(dashboardTitle).setPanelTitle(panelTitle).build();
+                    .setDashboardTitle(dashboardTitle).setPanelTitle(panelTitle).setPanelPath(panelPath).build();
         }
     }
 
@@ -321,6 +398,10 @@ public final class IncidentBook {
         long lastUpdateTs;
         long endedMs;
         boolean dirty;
+        IncidentState state = IncidentState.INCIDENT_STATE_OPEN;         // open, calm (waiting) or closed
+        String reason = "";
+        long resolvedMs;
+        long lastAnnouncedMs;
 
         final java.util.function.BooleanSupplier multiSite;
 
@@ -340,16 +421,16 @@ public final class IncidentBook {
 
         Change change(EventType type, long ts, long arrivedMs) {
             sequence++;
-            IncidentState state = type == EventType.EVENT_TYPE_CLOSED ? IncidentState.INCIDENT_STATE_CLOSED : IncidentState.INCIDENT_STATE_OPEN;
+            lastAnnouncedMs = arrivedMs;
             return new Change(type, toProto(state, ts), sequence, ts, arrivedMs);
         }
 
         Incident toProto(IncidentState state, long ts) {
             Incident.Builder b = Incident.newBuilder().setIncidentId(id).setState(state).setTitle(title())
-                    .setStartedMs(startedMs).setEndedMs(state == IncidentState.INCIDENT_STATE_CLOSED ? endedMs : 0)
-                    .setGroupKey(group.key()).setUpstream(group.upstream());
+                    .setStartedMs(startedMs).setEndedMs(state == IncidentState.INCIDENT_STATE_OPEN ? 0 : endedMs)
+                    .setGroupKey(group.key()).setUpstream(group.upstream()).setReason(reason).setResolvedMs(resolvedMs);
             members.values().forEach(m -> b.addSeries(m.toProto()));
-            long to = (state == IncidentState.INCIDENT_STATE_CLOSED ? endedMs : ts) + LINK_MARGIN_MS;
+            long to = (state == IncidentState.INCIDENT_STATE_OPEN ? ts : endedMs) + LINK_MARGIN_MS;
             Map<String, Link> all = new LinkedHashMap<>(links);
             linkFacts.forEach((viewId, f) -> {
                 String url = f.dashboardUrl(viewId, startedMs - LINK_MARGIN_MS, to);

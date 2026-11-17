@@ -56,7 +56,8 @@ class HubTest {
         send(event("b", 1, false, START + 60_000, 0));
         assertThat(page.got).hasSize(3);
         assertThat(page.got.get(0)).contains("\"incident_id\":\"a\"");
-        assertThat(page.got.get(1)).isEqualTo("{\"snapshot_complete\":true,\"day\":\"2026-11-16\",\"time_zone\":\"Asia/Kolkata\",\"day_by\":\"started\"}");
+        assertThat(page.got.get(1)).isEqualTo("{\"snapshot_complete\":true,\"day\":\"2026-11-16\",\"time_zone\":\"Asia/Kolkata\",\"day_by\":\"started\","
+                + "\"display_zones\":[\"UTC\",\"Asia/Kolkata\",\"America/New_York\"]}");
         assertThat(page.got.get(2)).contains("\"incident_id\":\"b\"");
     }
 
@@ -114,5 +115,12 @@ class HubTest {
         }
         stalled.request(1000);
         assertThat(stalled.got.size()).isLessThanOrEqualTo(11);
+    }
+
+    @Test
+    void theDisplayZonesTravelOnTheEndLine() {
+        Hub hub = new Hub(new Board(java.time.ZoneId.of("UTC"), false, 0), 100);
+        hub.reconfigure(java.time.ZoneId.of("UTC"), false, 0, java.util.List.of("America/New_York", "UTC"));
+        assertThat(hub.snapshotLineForTest()).endsWith("\"display_zones\":[\"America/New_York\",\"UTC\"]}");
     }
 }

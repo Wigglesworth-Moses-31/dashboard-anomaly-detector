@@ -77,6 +77,14 @@ public final class Hub {
     }
 
     /** A new time zone or day rule: recompute and send every page a fresh snapshot. */
+    /** How the page writes times: each zone, the main one first (add-display-time-zones Z2). */
+    private volatile java.util.List<String> displayZones = lab.anomaly.kit.settings.SharedSettings.DEFAULT_DISPLAY_ZONES;
+
+    public synchronized void reconfigure(ZoneId zone, boolean byReceived, long nowMs, java.util.List<String> zones) {
+        this.displayZones = java.util.List.copyOf(zones);
+        reconfigure(zone, byReceived, nowMs);
+    }
+
     public synchronized void reconfigure(ZoneId zone, boolean byReceived, long nowMs) {
         board.reconfigure(zone, byReceived, nowMs);
         endAll();
@@ -89,9 +97,15 @@ public final class Hub {
         viewers.clear();
     }
 
+    /** For tests: the end line a page receives. */
+    synchronized String snapshotLineForTest() {
+        return snapshotComplete();
+    }
+
     private String snapshotComplete() {
         return "{\"snapshot_complete\":true,\"day\":\"" + board.today() + "\",\"time_zone\":\"" + board.zone().getId()
-                + "\",\"day_by\":\"" + (board.byReceived() ? "received" : "started") + "\"}";
+                + "\",\"day_by\":\"" + (board.byReceived() ? "received" : "started")
+                + "\",\"display_zones\":[" + displayZones.stream().map(z -> "\"" + z + "\"").collect(java.util.stream.Collectors.joining(",")) + "]}";
     }
 
     // ---- health ---------------------------------------------------------------------------------------------

@@ -58,35 +58,50 @@ stay bounded.
   newest state
 
 ### Requirement: Each incident shows what and where
-The page SHALL show for each incident its title, state, start, end or duration so far, and for each line its signal,
-direction, peak against normal with the unit, and panel; and a link to each dashboard at the incident's time.
+The page SHALL show for each incident its title, state, start, end or duration so far, and each affected line as a
+path from the top: view (dashboard and saved view) → panel group → panel → the line's tags → its value against
+normal with the unit and the change. Titles and tag values SHALL be shown in full, wrapped when long, never cut. The
+page SHALL NOT show dashboard links on incident rows.
 
 #### Scenario: Reading an incident on the page
 - **WHEN** "/v1/invoices: latency up, errors up" is open
-- **THEN** the page shows "latency up: 1,569 ms (normal 138 ms), Latencies" and "errors up: 8 (normal 0), Count",
-  and a link that opens the lab dashboard around the incident's start
+- **THEN** the page shows "latency up: 1,569 ms (normal 138 ms), Latencies" and "errors up: 8 (normal 0), Count"
+  under their view and group, with no dashboard link
+
+#### Scenario: A line in a group of a saved view
+- **WHEN** an incident holds the line `status=200` of panel "Request Counts by Status Code" in group "API Gateway Metrics" of view "Shop · Payments", at 37 with normal 670
+- **THEN** the page shows the path Shop · Payments → API Gateway Metrics → Request Counts by Status Code → status=200 → 37 (normal 670, −94%)
+
+#### Scenario: Long values
+- **WHEN** a line's `api` tag is 120 characters long
+- **THEN** the page shows all 120 characters
 
 ### Requirement: The whole day stays on the page
-The page SHALL keep every incident that started today, open and closed. "Today" SHALL be the incident's start date
-in the shared time zone setting (default Asia/Kolkata). At midnight in that zone, closed incidents of the day before
-SHALL leave the page; incidents still open SHALL stay until they close.
+The page SHALL keep every incident that started today, open, calm and closed. "Today" SHALL be the incident's start
+date in the shared time zone setting (default UTC). At midnight in that zone, closed incidents of the day before
+SHALL leave the page; open and calm incidents SHALL stay until they are closed.
 
 #### Scenario: A busy day
 - **WHEN** 37 incidents started today and 35 of them have closed
 - **THEN** the page shows all 37: the 2 open ones first, then the 35 closed ones
 
 #### Scenario: Midnight
-- **WHEN** the clock in Asia/Kolkata passes midnight while one incident from 23:58 is still open
-- **THEN** yesterday's closed incidents leave the page, and the open one stays until it closes
+- **WHEN** the clock in UTC passes midnight while one incident from 23:58 is still open
+- **THEN** yesterday's closed incidents leave the page, and the open one stays until it is closed
+
+#### Scenario: Calm from yesterday
+- **WHEN** an incident from yesterday is calm without a reason at midnight
+- **THEN** it stays on the page under "Needs a reason"
 
 ### Requirement: The time zone is a setting
 The time zone SHALL come from the shared settings, so the page and the daily report agree. A change, for example to
-`UTC` or `America/New_York`, SHALL take effect without a restart: the page then shows times in that zone and the day
-boundary moves to that zone's midnight. An unknown time zone SHALL be rejected and the previous one kept.
+`UTC` or `America/New_York`, SHALL take effect without a restart: the day boundary moves to that zone's midnight.
+Times themselves SHALL be shown in the display time zones. An unknown time zone SHALL be rejected and the previous one
+kept.
 
 #### Scenario: Switch to New York time
 - **WHEN** the operator changes the shared time zone from Asia/Kolkata to America/New_York
-- **THEN** within a minute open pages show times in New York time and keep the incidents of New York's today
+- **THEN** within a minute open pages keep the incidents of New York's today
 
 #### Scenario: A typo in the zone
 - **WHEN** the time zone is set to "Asia/Kolkatta"
@@ -171,3 +186,79 @@ use, changes received, updates merged for slow pages, events set aside, and how 
 #### Scenario: Two pages open
 - **WHEN** two pages are connected
 - **THEN** the health page shows 2 viewers
+
+### Requirement: Drops read as percentages
+For a line below normal, the page SHALL show how far it fell as a percentage of normal ("−92%"), and a value of 0
+as "dropped to 0 (−100%)", never a ratio divided by zero.
+
+#### Scenario: Drop to zero
+- **WHEN** an incident line has value 0 and normal 5
+- **THEN** the page shows "dropped to 0 (−100%)"
+
+#### Scenario: Partial drop
+- **WHEN** an incident line has value 1 and normal 13
+- **THEN** the page shows "−92%"
+
+### Requirement: A line's past is one click away
+Opening an affected line SHALL show the line's earlier incidents of the last 2 days: the last one before the current
+one (start, duration, peak against normal, reason) and the list of all of them, newest first. A reason not given yet
+SHALL show as "—". The history SHALL come back the same after a Notifier restart.
+
+#### Scenario: Three times in two days
+- **GIVEN** a line had incidents yesterday at 22:14 and today at 09:03
+- **WHEN** its incident of 13:04 is opened on the page
+- **THEN** it shows "last time: today 09:03" with its duration, peak and normal, and lists 3 incidents in the last 2 days
+
+#### Scenario: After a restart
+- **WHEN** the Notifier restarts and the same line is opened
+- **THEN** the same history is shown
+
+#### Scenario: Older than two days
+- **WHEN** a line's only earlier incident was 3 days ago
+- **THEN** the page shows "no earlier incident in the last 2 days"
+
+### Requirement: Every time on the page in all display zones
+Every time the page shows (incident start and end, "since", the closed list, line history, reasons) SHALL appear in
+each display zone, the main one first, each with its short name for that date (EST or EDT); a zone on another calendar
+day SHALL show that date.
+
+#### Scenario: Winter
+- **WHEN** an incident starts at 13:04:10 UTC on 17 Nov 2026
+- **THEN** the page shows `13:04:10 UTC · 18:34:10 IST · 08:04:10 EST`
+
+#### Scenario: Summer
+- **WHEN** an incident starts at 13:04:10 UTC on 17 Jul 2026
+- **THEN** New York is shown as `09:04:10 EDT`
+
+#### Scenario: Another calendar day
+- **WHEN** an incident starts at 23:10 UTC on 17 Nov 2026
+- **THEN** India is shown as `04:40 IST (18 Nov)`
+
+### Requirement: Incidents waiting for a reason are listed
+The page SHALL list calm incidents under "Needs a reason", with when they started and became calm, how long they
+lasted, and their lines; the list SHALL show how many are waiting.
+
+#### Scenario: Two waiting
+- **WHEN** two incidents are calm without a reason
+- **THEN** "Needs a reason (2)" lists both
+
+### Requirement: A reason can be given on the page
+Every open and calm incident SHALL have a reason box (1 to 500 characters). Sending it SHALL show "saving…" until the
+incident's closing event arrives, then the incident shows as closed with its reason; when no closing event arrives
+within 10 seconds, the page SHALL say "not saved" and keep the text. Empty and too long reasons SHALL be refused on the
+page.
+
+#### Scenario: Reason given
+- **WHEN** a reason is typed for a calm incident and sent
+- **THEN** within a second the incident is closed on the page and shows the reason with the time, in the display time zones
+
+#### Scenario: Nothing came back
+- **WHEN** the Detector does not answer within 10 seconds
+- **THEN** the page says "not saved" and the typed reason stays in the box
+
+### Requirement: Reasons show in a line's past
+A line's history SHALL show each earlier incident's reason, or "—" when none was given.
+
+#### Scenario: Earlier reason
+- **WHEN** a line's earlier incident was closed with "deploy rolled back"
+- **THEN** that entry of the line's history shows "reason: deploy rolled back"

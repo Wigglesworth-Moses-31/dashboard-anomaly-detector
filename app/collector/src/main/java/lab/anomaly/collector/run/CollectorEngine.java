@@ -77,9 +77,11 @@ public class CollectorEngine {
 
     /** What the lanes share and whose change rebuilds every lane (design M7). */
     private record Shared(int retries, java.time.Duration retryBase, java.time.Duration retryCap, int metadataCacheSize,
-                          java.time.Duration metadataTtl, CollectorSettings.Recording recording, java.time.Duration step) {
+                          java.time.Duration metadataTtl, CollectorSettings.Recording recording, java.time.Duration step,
+                          java.time.Duration settle) {
         static Shared of(CollectorSettings s) {
-            return new Shared(s.retries(), s.retryBase(), s.retryCap(), s.metadataCacheSize(), s.metadataTtl(), s.recording(), s.step());
+            return new Shared(s.retries(), s.retryBase(), s.retryCap(), s.metadataCacheSize(), s.metadataTtl(), s.recording(), s.step(),
+                    s.effectiveSettleDelay());
         }
     }
 
@@ -285,7 +287,7 @@ public class CollectorEngine {
         }
         Fetcher fetcher = new Fetcher(source, clock, Thread::sleep, config.maxConcurrentRequests(), config.rateLimitShare(),
                 s.retries(), new Backoff(s.retryBase(), s.retryCap(), ThreadLocalRandom.current()));
-        PollProcessor processor = new PollProcessor(new AnswerTranslator("datadog", config.site()),
+        PollProcessor processor = new PollProcessor(new AnswerTranslator("datadog", config.site(), s.effectiveSettleDelay().toMillis()),
                 new Classifier(source, s.metadataCacheSize(), s.metadataTtl().toMillis(), clock), emitter,
                 () -> settings.get().classification());
         return new Lane(config, credentials, source, fetcher, processor, new Discovery(source, config.name()));
@@ -587,7 +589,7 @@ public class CollectorEngine {
                 continue;
             }
             ReplaySource source = new ReplaySource(laneDir);
-            PollProcessor processor = new PollProcessor(new AnswerTranslator("datadog", config.site()),
+            PollProcessor processor = new PollProcessor(new AnswerTranslator("datadog", config.site(), s.effectiveSettleDelay().toMillis()),
                     new Classifier(source, s.metadataCacheSize(), s.metadataTtl().toMillis(), replayClock), target,
                     () -> settings.get().classification());
             Map<String, PollUnit> plan = new HashMap<>();
@@ -639,6 +641,16 @@ public class CollectorEngine {
             }
         });
         return List.copyOf(current.values());
+    }
+
+    /** Late changes of a source (fix-false-drops design F2). */
+    public lab.anomaly.collector.emit.Emitter.LateChanges lateChanges(String site) {
+        Emitter e = emitter;
+        return e == null ? null : e.lateChanges(site);
+    }
+
+    public long settleDelayMs() {
+        return settings.get().effectiveSettleDelay().toMillis();
     }
 
     public double recentWindowSeconds() {

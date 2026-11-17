@@ -45,7 +45,13 @@ final class ReplayComparison {
         ReplaySource replay = new ReplaySource(recordingDir);
         List<String> replayed = new ArrayList<>();
         MessageSink sink = new MessageSink() {
-            @Override public void send(SeriesDescriptor d) { replayed.add("SeriesDescriptor\t" + ContractJson.toJson(d)); }
+            // The live run of 15 Nov predates View.panel_path (add-incident-history): compare without it, so any
+            // other difference still fails
+            @Override public void send(SeriesDescriptor d) {
+                SeriesDescriptor.Builder b = d.toBuilder();
+                b.getViewsBuilderList().forEach(lab.anomaly.contracts.v1.View.Builder::clearPanelPath);
+                replayed.add("SeriesDescriptor\t" + ContractJson.toJson(b.build()));
+            }
             @Override public void send(MetricPoints p) { replayed.add("MetricPoints\t" + ContractJson.toJson(p)); }
         };
         CollectorEngine.ReplayClock clock = new CollectorEngine.ReplayClock();

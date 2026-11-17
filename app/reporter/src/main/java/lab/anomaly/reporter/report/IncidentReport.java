@@ -33,7 +33,8 @@ public final class IncidentReport extends ReportTemplate {
         var w = d.window();
         DateTimeFormatter day = DateTimeFormatter.ofPattern("EEE d MMM yyyy", Locale.ENGLISH).withZone(w.zone());
         md.append("# Incident report · ").append(day.format(Instant.ofEpochMilli(w.startMs()))).append(" · ").append(w.zone().getId())
-                .append(" (").append(hm(w.startMs(), d)).append("–").append(w.wholeDay() ? "24:00" : hm(w.endMs(), d)).append(")\n\n");
+                .append(" (").append(dayHm(w.startMs(), d)).append("–").append(w.wholeDay() ? "24:00" : dayHm(w.endMs(), d)).append(")\n\n")
+                .append("Window: ").append(hm(w.startMs(), d)).append(" – ").append(hm(w.endMs(), d)).append("\n\n");
         List<Incident> inc = d.incidents();
         if (inc.isEmpty()) {
             md.append("**No incidents** in this window");
@@ -284,11 +285,27 @@ public final class IncidentReport extends ReportTemplate {
                 .replace("<", "&lt;").replace("\n", " ");
     }
 
-    private static String hms(long ms, ReportData d) {
-        return DateTimeFormatter.ofPattern("HH:mm:ss").withZone(d.window().zone()).format(Instant.ofEpochMilli(ms));
+    /** The window's own clock in the header ("00:00–24:00" of the day's zone): a name for the day, not a moment. */
+    private static String dayHm(long ms, ReportData d) {
+        return DateTimeFormatter.ofPattern("HH:mm").withZone(d.window().zone()).format(Instant.ofEpochMilli(ms));
     }
 
-    private static String hm(long ms, ReportData d) {
-        return DateTimeFormatter.ofPattern("HH:mm").withZone(d.window().zone()).format(Instant.ofEpochMilli(ms));
+    /** Every time in the display zones, as on the page (add-display-time-zones Z3). */
+    private String hms(long ms, ReportData d) {
+        return lab.anomaly.kit.settings.Times.format(ms, zones, true);
+    }
+
+    private String hm(long ms, ReportData d) {
+        return lab.anomaly.kit.settings.Times.format(ms, zones, false);
+    }
+
+    private final java.util.List<java.time.ZoneId> zones;
+
+    public IncidentReport() {
+        this(new lab.anomaly.kit.settings.SharedSettings("UTC", "lab").displayZones());
+    }
+
+    public IncidentReport(java.util.List<java.time.ZoneId> zones) {
+        this.zones = java.util.List.copyOf(zones);
     }
 }
