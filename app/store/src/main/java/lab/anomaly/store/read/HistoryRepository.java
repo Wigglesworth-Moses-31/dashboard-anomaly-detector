@@ -63,6 +63,56 @@ public class HistoryRepository {
                 }, Timestamp.from(Instant.ofEpochMilli(fromMs)), Timestamp.from(Instant.ofEpochMilli(toMs))));
     }
 
+    /** Every line's description (add-dashboard-view D1). O(lines), streamed. */
+    public void descriptors(Consumer<byte[]> each) {
+        readOnly.executeWithoutResult(status -> streaming.query("SELECT descriptor FROM metrics.series ORDER BY series_id",
+                rs -> {
+                    each.accept(rs.getBytes(1));
+                }));
+    }
+
+    /**
+     * Points of many lines in [from, to), per line oldest first, in chunks of at most {@link #CHUNK} that never mix
+     * lines (add-dashboard-view D1). Raw: the 10-second values. Per minute: two points per minute, its lowest value at
+     * the minute and its highest 30 s later, so thinning keeps both drops and spikes. One query: O(points).
+     */
+    public void batch(List<String> seriesIds, long fromMs, long toMs, boolean raw, java.util.function.BiConsumer<String, List<Point>> chunks) {
+        String sql = raw
+                ? "SELECT series_id, ts, value, value FROM metrics.points WHERE series_id = ANY (?) AND ts >= ? AND ts < ? ORDER BY series_id, ts"
+                : "SELECT series_id, minute, min, max FROM metrics.points_1m WHERE series_id = ANY (?) AND minute >= ? AND minute < ? ORDER BY series_id, minute";
+        readOnly.executeWithoutResult(status -> streaming.execute((java.sql.Connection c) -> {
+            try (var ps = c.prepareStatement(sql)) {
+                ps.setFetchSize(CHUNK);
+                ps.setArray(1, c.createArrayOf("text", seriesIds.toArray()));
+                ps.setTimestamp(2, Timestamp.from(Instant.ofEpochMilli(fromMs)));
+                ps.setTimestamp(3, Timestamp.from(Instant.ofEpochMilli(toMs)));
+                try (var rs = ps.executeQuery()) {
+                    String current = null;
+                    List<Point> chunk = new ArrayList<>(CHUNK);
+                    while (rs.next()) {
+                        String id = rs.getString(1);
+                        if (current != null && (!current.equals(id) || chunk.size() >= CHUNK - 1)) {
+                            chunks.accept(current, List.copyOf(chunk));
+                            chunk.clear();
+                        }
+                        current = id;
+                        long ts = rs.getTimestamp(2).getTime();
+                        if (raw) {
+                            chunk.add(Point.newBuilder().setTsMs(ts).setValue(rs.getDouble(3)).build());
+                        } else {
+                            chunk.add(Point.newBuilder().setTsMs(ts).setValue(rs.getDouble(3)).build());
+                            chunk.add(Point.newBuilder().setTsMs(ts + 30_000).setValue(rs.getDouble(4)).build());
+                        }
+                    }
+                    if (current != null && !chunk.isEmpty()) {
+                        chunks.accept(current, List.copyOf(chunk));
+                    }
+                }
+            }
+            return null;
+        }));
+    }
+
     private void stream(String sql, String seriesId, long fromMs, long toMs, boolean hasPartial, Consumer<List<Point>> chunks) {
         readOnly.executeWithoutResult(status -> {
             List<Point> chunk = new ArrayList<>(CHUNK);

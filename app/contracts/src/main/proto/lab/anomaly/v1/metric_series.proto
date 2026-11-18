@@ -38,6 +38,8 @@ message View {
   string view_title = 2;
   string panel_title = 3;
   string panel_path = 4;                // added in add-incident-history: the panel's group or section, "" when none
+  int32 group_index = 5;                // added in add-dashboard-view: the group's position on the dashboard (Datadog's order)
+  int32 panel_index = 6;                // added in add-dashboard-view: the panel's position on the dashboard; 0 = unknown
 }
 
 // Starts at UNSPECIFIED = 0 so a value that was never set is visible (design C2).

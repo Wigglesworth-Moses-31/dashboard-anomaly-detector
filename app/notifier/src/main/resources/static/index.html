@@ -3,53 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live incidents</title>
+  <title>Live dashboards</title>
   <link rel="stylesheet" href="app.css">
+  <script src="vendor/echarts.min.js"></script>
   <script type="module" src="app.js"></script>
   <script type="module" src="settings.js"></script>
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="dot-logo"></span>Live incidents</div>
-    <nav class="tabs" aria-label="Views">
-      <a href="#" id="tabIncidents" class="tab active">Incidents</a>
+    <div class="brand"><span class="dot-logo"></span>Live dashboards</div>
+    <nav class="tabs" id="tabs" aria-label="Regions">
       <a href="#settings" id="tabSettings" class="tab">Settings</a>
     </nav>
+    <button id="attention" class="attention" type="button" aria-expanded="false">● 0 open · 0 need a reason</button>
     <div class="conn" id="conn"><span class="pill" id="connPill">connecting</span><span id="lastChange" class="muted"></span></div>
     <div class="toggles">
-      <button id="notifyBtn" class="toggle" title="Desktop notification when a new incident opens">🔔 off</button>
-      <button id="soundBtn" class="toggle" title="Short sound when a new incident opens">🔊 off</button>
+      <button id="notifyBtn" class="toggle" title="Desktop notification when a new anomaly opens">🔔 off</button>
+      <button id="soundBtn" class="toggle" title="Short sound when a new anomaly opens">🔊 off</button>
     </div>
   </header>
-  <main id="incidentsView">
-    <section class="day">
-      <div class="day-title" id="dayTitle">Today</div>
-      <div class="cards">
-        <div class="card"><div class="num" id="cToday">0</div><div class="lbl">today</div></div>
-        <div class="card open"><div class="num" id="cOpen">0</div><div class="lbl">open</div></div>
-        <div class="card"><div class="num" id="cClosed">0</div><div class="lbl">closed</div></div>
-        <div class="card"><div class="num" id="cLongest">–</div><div class="lbl">longest</div></div>
-      </div>
-    </section>
-    <section>
-      <h2>Open <span class="count" id="hOpen"></span></h2>
-      <div id="openList" class="list"></div>
-      <div id="quiet" class="quiet">All quiet today ✓</div>
-    </section>
-    <section id="calmSection">
-      <h2>Needs a reason <span class="count" id="hCalm"></span></h2>
-      <p class="muted calm-note">Back to normal, but not closed until someone says why (the reason is kept with the incident).</p>
-      <div id="calmList" class="list"></div>
-    </section>
-    <section>
-      <div class="closed-head">
-        <h2>Closed today <span class="count" id="hClosed"></span></h2>
-        <input id="filter" type="search" placeholder="/  filter…" autocomplete="off" aria-label="Filter incidents">
-      </div>
-      <div id="groups" class="groups"></div>
-      <div id="closedList" class="list closed-list"></div>
-    </section>
-  </main>
+  <div id="attentionList" class="attention-list" hidden></div>
+  <main id="incidentsView"></main>
   <main id="settingsView" hidden>
     <section>
       <h2>Regions <span class="count" id="sCount"></span></h2>

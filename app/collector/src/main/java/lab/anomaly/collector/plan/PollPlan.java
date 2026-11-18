@@ -41,14 +41,19 @@ public final class PollPlan {
         for (WatchedView v : views) {
             Dashboard dashboard = v.dashboard();
             String filters = v.filtersText();
+            Map<String, Integer> groups = new LinkedHashMap<>();            // Datadog's order: first appearance
+            int panelIndex = 0;
             for (Panel panel : dashboard.panels()) {
+                panelIndex++;
+                int groupIndex = groups.computeIfAbsent(panel.path() == null ? "" : panel.path(), k -> groups.size() + 1);
                 List<Query> queries = new ArrayList<>();
                 for (Query query : panel.queries()) {
                     String filled = FilterFiller.fillMulti(query.text(), dashboard.variables(), v.values());
                     queries.add(new Query(query.name(), QueryPlanner.withRollup(filled, step)));
                 }
                 String key = new TimeseriesRequest(queries, panel.formulas(), 0, 0, 0).canonicalQuestion();
-                PollUnit.View view = new PollUnit.View(v.viewId(), v.viewTitle(), panel.title(), panel.path(), filters);
+                PollUnit.View view = new PollUnit.View(v.viewId(), v.viewTitle(), panel.title(), panel.path(), filters,
+                        groupIndex, panelIndex);                          // add-dashboard-view D1
                 PollUnit existing = byKey.get(key);
                 if (existing == null) {
                     byKey.put(key, new PollUnit(key, queries, panel.formulas(), List.of(view), lane));

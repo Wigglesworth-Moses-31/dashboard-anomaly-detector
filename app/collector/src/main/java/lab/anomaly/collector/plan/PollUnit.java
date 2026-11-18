@@ -30,9 +30,14 @@ public record PollUnit(String key, List<Query> queries, List<String> formulas, L
     }
 
     /** A panel showing this unit's numbers; {@code filters} is the view's decided filters (for health and the check). */
-    public record View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters) {
+    public record View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters,
+                       int groupIndex, int panelIndex) {
         public View(String dashboardId, String dashboardTitle, String panelTitle, String path) {
             this(dashboardId, dashboardTitle, panelTitle, path, "");
+        }
+
+        public View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters) {
+            this(dashboardId, dashboardTitle, panelTitle, path, filters, 0, 0);
         }
 
         /** "Upstream Service Metrics / Latencies". */

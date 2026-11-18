@@ -4,6 +4,7 @@ syntax = "proto3";
 package lab.anomaly.v1;
 
 import "lab/anomaly/v1/metric_points.proto";
+import "lab/anomaly/v1/metric_series.proto";
 
 option java_package = "lab.anomaly.contracts.v1";
 option java_multiple_files = true;
@@ -19,6 +20,20 @@ service StoreService {
   rpc GetSummary (SummaryRequest) returns (stream SeriesSummary);
   // Removes raw points older than a time, never newer than 3 hours ago (added by add-reporter, design R6).
   rpc RemoveRawBefore (RemoveRawRequest) returns (RemoveRawReply);
+  // Every metric line the Store knows, with its full description (added by add-dashboard-view, design D1).
+  rpc ListSeries (ListSeriesRequest) returns (stream SeriesDescriptor);
+  // Points of many lines (at most 1000) over one range, each chunk naming its line (add-dashboard-view, design D1).
+  // At MINUTE resolution each minute gives two points: its lowest value at the minute and its highest 30 s later.
+  rpc GetHistoryBatch (HistoryBatchRequest) returns (stream HistoryChunk);
+}
+
+message ListSeriesRequest {}
+
+message HistoryBatchRequest {
+  repeated string series_ids = 1;
+  int64 from_ms = 2;                    // inclusive, UTC milliseconds
+  int64 to_ms = 3;                      // exclusive, UTC milliseconds
+  Resolution resolution = 4;
 }
 
 message RemoveRawRequest {

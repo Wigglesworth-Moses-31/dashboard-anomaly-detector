@@ -1,45 +1,15 @@
-// The live incident page (add-notifier design N5, N5b). No framework: a Map of incidents, two sorted arrays of ids,
-// changes coalesced and applied once per animation frame, lazy details for closed incidents, incremental counters.
+// The live dashboards (add-dashboard-view D5): one page per region with its dashboards (collapsible, Datadog's group
+// order, live line charts), a page per panel and a page per metric (graph and details on top, its anomalies below).
+// Anomalies arrive on the incident stream (RSocket); values come from /dash/* (one Store call per dashboard) and, for
+// the panels on screen only, from /dash/live. Charts exist only for panels near the screen (IntersectionObserver).
 "use strict";
 import { openStream } from "./rsocket.js";
 
-// ---- state ------------------------------------------------------------------------------------------------
-const incidents = new Map();      // id -> view { ev, seq, open, startMs, endMs, label, color, search, row, expanded }
-const openIds = [];               // sorted: newest start first
-const calmIds = [];               // sorted: newest calm first (add-incident-resolution: waiting for a reason)
-const closedIds = [];             // sorted: newest end first
-const groupCounts = new Map();    // group label -> incidents today
-let pending = new Map();          // id -> newest event not yet applied (coalescing)
-let frameScheduled = false;
-let staging = null;               // during a (re)connect: the new snapshot, applied at snapshot_complete
-let caughtUp = false;
-let day = "", zone = "UTC", dayByReceived = false;
-let longestMs = 0, lastChangeAt = 0;
-let filterText = "";
-let groupsDirty = false, countsDirty = false;
-const newlyOpened = [];           // OPENED events of this frame, for one notification per burst
-const settings = loadSettings();
-
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } } };
 
-// ---- formatting (formatters are cached: making them is the slow part) ---------------------------------------
-let timeFmt, dayFmt;
-const numFmt0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-const numFmt1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-const numFmt3 = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 });
-function setZone(z) {
-  zone = z;
-  timeFmt = new Intl.DateTimeFormat(undefined, { timeZone: z, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-  dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit" });
-}
-setZone(zone);
-
-// Every time in each display zone, the main one first (add-display-time-zones Z2):
-//   13:04:10 UTC · 18:34:10 IST · 08:04:10 EST       a zone on another day adds its date: 04:40 IST (18 Nov)
-// Formatters are made once per zone list; zone names are cached per zone and day. Browsers name India "IST" only in
-// Indian English and New York "EST/EDT" only in US English, so each zone takes the first locale with a real
-// abbreviation, else the offset ("GMT+5:30").
+// ---- formatting: every time in each display zone, the main one first (add-display-time-zones) ----------------
 let zoneFmts = [];
 const labelCache = new Map();
 const LABEL_LOCALES = ["en-US", "en-IN", "en-GB", "en-AU"];
@@ -74,449 +44,229 @@ function inZones(ms, seconds) {
     const d = i === 0 ? mainDate : f.date.format(ms);
     let s = (seconds ? f.secs : f.mins).format(ms) + " " + zoneLabel(f.zone, ms, d);
     if (i > 0 && d !== mainDate) s += " (" + f.dm.format(ms) + ")";
+    else if (i === 0) s = f.dm.format(ms) + " " + s;
     return s;
   }).join(" · ");
 }
-const time = (ms) => inZones(ms, true);
 const shortTime = (ms) => inZones(ms, false);
-const mainShortTime = (ms) => zoneFmts[0].mins.format(Number(ms));            // the narrow end-time column only
-function num(v) { const a = Math.abs(v); return (a >= 100 ? numFmt0 : a >= 1 ? numFmt1 : numFmt3).format(v); }
-function duration(ms) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return s + " s";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + " min";
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
+const numFmt0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const numFmt1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+const numFmt3 = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 });
+function num(v) { if (v == null || !isFinite(v)) return "—"; const a = Math.abs(v); return (a >= 100 ? numFmt0 : a >= 1 ? numFmt1 : numFmt3).format(v); }
 function withUnit(v, unit) {
+  if (v == null || !isFinite(v)) return "—";
   if (unit === "percent") return num(v) + "%";
   if (unit === "ms" || unit === "millisecond") return num(v) + " ms";
   if (unit === "second") return v < 1 ? num(v * 1000) + " ms" : num(v) + " s";
   return num(v);
 }
+function duration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + " s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " min";
+  const h = Math.floor(m / 60);
+  return h < 48 ? h + " h " + (m % 60) + " min" : Math.floor(h / 24) + " d " + (h % 24) + " h";
+}
+/** Peak against normal in plain words: "3.4×", "−92%", "dropped to 0 (−100%)", "+12 pts", "silent". */
+function change(s) {
+  const peak = s.peak_value ?? s.peak ?? 0, normal = s.normal_value ?? s.normal ?? 0, dir = s.direction ?? s.reason;
+  if (dir === "silent") return "silent";
+  if (s.unit === "percent" || /rate/.test(s.signal || "")) { const pts = peak - normal; return (pts > 0 ? "+" : "−") + num(Math.abs(pts)) + " pts"; }
+  if (normal <= 0) return "new";
+  if (peak < normal) { const pct = Math.round((1 - peak / normal) * 100); return peak <= 0 ? "dropped to 0 (−100%)" : "−" + pct + "%"; }
+  return num(peak / normal) + "×";
+}
+const tagsText = (tags) => Object.entries(tags || {}).map(([k, v]) => k + "=" + v).join(", ");
 
-// ---- signals: colour and how bad ----------------------------------------------------------------------------
-const COLOR = { "errors": "red", "success-rate": "red", "error-rate": "red", "latency": "amber", "saturation": "violet", "traffic": "blue" };
-const RANK = { red: 4, amber: 3, violet: 2, blue: 1, grey: 0 };
-const colorOf = (s) => (s.reason === "silent" ? "grey" : COLOR[s.signal] || "grey");
-const isPoints = (s) => s.unit === "percent" || /rate/.test(s.signal || "");
-function meter(s) {
-  const peak = s.peak_value || 0, normal = s.normal_value || 0;
-  if (s.reason === "silent") return { width: 1, text: "silent" };
-  if (isPoints(s)) {
-    const pts = peak - normal;
-    return { width: Math.min(1, Math.abs(pts) / 50), text: (pts > 0 ? "+" : "−") + num(Math.abs(pts)) + " pts" };
-  }
-  if (normal <= 0) return { width: 1, text: "new" };
-  if (peak < normal) {                                    // a drop: how far below normal, never a ratio over zero
-    const pct = Math.round((1 - peak / normal) * 100);    // (fix-false-drops design F4)
-    return { width: pct / 100, text: peak <= 0 ? "dropped to 0 (−100%)" : "−" + pct + "%" };
-  }
-  const ratio = peak / normal;
-  return { width: Math.min(1, Math.log10(ratio) / 2), text: num(ratio) + "×" };   // 100× = full
+// ---- state ----------------------------------------------------------------------------------------------------
+let catalogue = { sites: [], ranges: ["15m", "1h", "4h", "1d", "7d"], lines_per_panel: 20 };
+let regions = [];                       // [{name, site}] from /settings/state
+const lineInfo = new Map();             // line id -> {line, places: [{site, dashboard, group, panelId, panel}]}
+const panelById = new Map();            // panel id -> {panel, dashboard, group, site}
+const dashById = new Map();             // dashboard id -> {dashboard, site}
+const incidents = new Map();            // incident id -> latest Incident (JSON)
+const linesOfIncident = new Map();      // incident id -> [line ids]
+const incidentsOfLine = new Map();      // line id -> Set(incident id)
+let range = store.get("dash-range") || "1h";
+const LIVE_RANGES = new Set(["15m", "1h"]);
+const rangeMs = (r) => { const n = parseInt(r, 10); return n * ({ m: 60e3, h: 3600e3, d: 86400e3 })[r.slice(-1)]; };
+
+async function getJson(url, opts) {
+  const r = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.problem || "HTTP " + r.status);
+  return body;
 }
 
-// ---- incoming lines -----------------------------------------------------------------------------------------
-function onLine(text) {
-  const msg = JSON.parse(text);
-  if (msg.snapshot_complete) {
-    day = msg.day;
-    dayByReceived = msg.day_by === "received";
-    setZone(msg.time_zone);
-    if (msg.display_zones) setDisplayZones(msg.display_zones);
-    replaceAll(staging);
-    staging = null;
-    caughtUp = true;
-    return;
-  }
-  lastChangeAt = Date.now();
-  const target = staging || pending;           // before snapshot_complete: build the new snapshot aside
-  const id = msg.incident_id;
-  const prev = target.get(id);
-  if (!prev || Number(msg.sequence) > Number(prev.sequence)) target.set(id, msg);
-  if (!staging) schedule();
-}
-
-function schedule() {
-  if (!frameScheduled) { frameScheduled = true; requestAnimationFrame(flush); }
-}
-
-/** Applies everything that arrived since the last frame: O(changes). */
-function flush() {
-  frameScheduled = false;
-  const batch = pending;
-  pending = new Map();
-  for (const ev of batch.values()) apply(ev, true);
-  if (newlyOpened.length) { notify(newlyOpened.splice(0)); }
-  refreshCounts();
-}
-
-/** Throws away the old list and shows a new snapshot, built off-screen in one DocumentFragment per list. */
-function replaceAll(snapshot) {
-  incidents.clear(); openIds.length = 0; calmIds.length = 0; closedIds.length = 0; groupCounts.clear(); longestMs = 0;
-  $("openList").textContent = ""; $("calmList").textContent = ""; $("closedList").textContent = "";
-  const views = [];
-  for (const ev of (snapshot || new Map()).values()) { const v = makeView(ev); if (v) views.push(v); }
-  views.sort((a, b) => order(a) - order(b));
-  const frags = { openList: document.createDocumentFragment(), calmList: document.createDocumentFragment(), closedList: document.createDocumentFragment() };
-  for (const v of views) {
-    incidents.set(v.id, v);
-    idsOf(v).push(v.id);
-    count(v, +1);
-    frags[listOf(v)].appendChild(v.row);
-  }
-  for (const id in frags) $(id).appendChild(frags[id]);
-  pending = new Map();
-  refreshCounts(true);
-  applyFilter();
-}
-
-/** One event: update or insert its incident, moving it between lists if it closed. */
-function apply(ev, live) {
-  const old = incidents.get(ev.incident_id);
-  if (old && Number(ev.sequence) <= old.seq) return;
-  const v = makeView(ev);
-  if (old) remove(old);
-  if (!v) { refreshCounts(); return; }
-  incidents.set(v.id, v);
-  insertSorted(v);
-  count(v, +1);
-  // no notification for an incident of only business-as-usual lines (add-line-reasons L4)
-  if (live && !old) { v.row.classList.add("fresh"); if (ev.type === "EVENT_TYPE_OPENED" && caughtUp && !v.bauOnly) newlyOpened.push(v); }
-  if (filterText) v.row.classList.toggle("hidden", !v.search.includes(filterText));
-}
-
-function makeView(ev) {
-  const inc = ev.incident || {};
-  const open = inc.state !== "INCIDENT_STATE_CLOSED";
-  const calm = inc.state === "INCIDENT_STATE_CALM";
-  const startMs = Number(inc.started_ms || 0), endMs = Number(inc.ended_ms || 0);
-  if (!open && day && !dayByReceived && dayFmt.format(startMs) < day) return null;   // an older day's, now closed
-  const series = inc.series || [];
-  let color = "grey";
-  for (const s of series) { const c = colorOf(s); if (RANK[c] > RANK[color]) color = c; }
-  const title = inc.title || ev.incident_id;
-  const v = {
-    id: ev.incident_id, ev, seq: Number(ev.sequence), open, calm, startMs, endMs, color, title, reason: inc.reason || "",
-    resolvedMs: Number(inc.resolved_ms || 0),
-    label: title.lastIndexOf(": ") > 0 ? title.slice(0, title.lastIndexOf(": ")) : title,   // labels may contain ": "
-    search: (title + " " + series.map((s) => [s.signal, s.metric, s.panel_title, s.panel_path, s.dashboard_title, ...Object.values(s.group_tags || {})].join(" ")).join(" ")).toLowerCase(),
-    expanded: false,
-    // add-line-reasons: lines still needing a person's reason; BAU lines never do
-    waiting: series.filter((s) => !s.bau && !s.explanation).map((s) => s.series_id),
-    bauOnly: series.length > 0 && series.every((s) => s.bau),
-  };
-  forgetAnswered(v, series);
-  v.row = open ? openRow(v, inc, series) : closedRow(v);
-  if (v.bauOnly) v.row.classList.add("bau-only");
-  return v;
-}
-
-// ---- rows -----------------------------------------------------------------------------------------------
-function openRow(v, inc, series) {
-  const row = el("div", "inc s-" + v.color);
-  row.dataset.id = v.id;
-  const head = el("div", "inc-head");
-  head.append(el("span", "title", v.title));
-  v.durEl = el("span", "when", v.calm
-    ? "calm since " + time(v.endMs) + " · lasted " + duration(v.endMs - v.startMs)
-    : "since " + time(v.startMs) + " · " + duration(Date.now() - v.startMs));
-  head.append(v.durEl);                       // no dashboard links on the page (add-incident-history H3)
-  row.append(head, lines(series, v));
-  if (v.waiting.length >= 2) row.append(reasonBox(v.id, "", "Same reason for all " + v.waiting.length + " lines (closes it)"));
-  return row;
-}
-
-function closedRow(v) {
-  const row = el("div", "inc s-" + v.color);
-  row.dataset.id = v.id;
-  const head = el("div", "inc-head");
-  head.append(el("span", "endt", mainShortTime(v.endMs)), el("span", "title", v.title),
-    el("span", "when", time(v.startMs) + " – " + time(v.endMs) + " · " + duration(v.endMs - v.startMs)), el("span", "chev", "▸"));
-  row.append(head);
-  if (v.reason) row.append(el("div", "reason-shown", "Reason: " + v.reason + (v.resolvedMs ? " · given " + shortTime(v.resolvedMs) : "")));
-  return row;                                 // details are built only when expanded (lazy)
-}
-
-// The affected lines as a small tree per incident (add-incident-history H3):
-//   view (dashboard · saved view) → panel group → panel → line tags · value · normal · change · ▸ history
-// One Map per level, in first-seen order: O(lines). Full text, wrapped; nothing is cut.
-function lines(series, v) {
-  const tree = new Map();
-  for (const s of series) {
-    const view = s.dashboard_title || "Dashboard", group = s.panel_path || "", panel = s.panel_title || "Panel";
-    if (!tree.has(view)) tree.set(view, new Map());
-    const groups = tree.get(view);
-    if (!groups.has(group)) groups.set(group, new Map());
-    const panels = groups.get(group);
-    if (!panels.has(panel)) panels.set(panel, []);
-    panels.get(panel).push(s);
-  }
-  const box = el("div", "lines tree");
-  for (const [view, groups] of tree) {
-    box.append(el("div", "t-view", view));
-    for (const [group, panels] of groups) {
-      if (group) box.append(el("div", "t-group", group));
-      for (const [panel, list] of panels) {
-        box.append(el("div", group ? "t-panel" : "t-panel t-nogroup", panel));
-        for (const s of list) {
-          box.append(leaf(s, v.id, group));
-          const why = lineReason(s, v);
-          if (why) box.append(why);
+async function loadCatalogue() {
+  try {
+    const [c, s] = await Promise.all([getJson("/dash/catalogue"), getJson("/settings/state").catch(() => null)]);
+    catalogue = c;
+    regions = s ? (s.regions || []).map((r) => ({ name: r.name, site: r.site })) : [];
+    if (s && s.old && s.old.site && !regions.length) regions = [{ name: "default", site: s.old.site }];
+    if (!catalogue.ranges.includes(range)) range = catalogue.ranges[1] || catalogue.ranges[0];
+    lineInfo.clear(); panelById.clear(); dashById.clear();
+    for (const site of catalogue.sites) {
+      for (const d of site.dashboards) {
+        dashById.set(d.id, { dashboard: d, site: site.site });
+        for (const g of d.groups) {
+          for (const p of g.panels) {
+            panelById.set(p.id, { panel: p, dashboard: d, group: g, site: site.site });
+            for (const l of p.lines) {
+              let info = lineInfo.get(l.id);
+              if (!info) { info = { line: l, places: [] }; lineInfo.set(l.id, info); }
+              info.places.push({ site: site.site, dashboard: d, group: g, panel: p });
+            }
+          }
         }
       }
     }
+  } catch (e) { catalogue.problem = e.message; }
+  drawTabs();
+}
+
+function siteTabs() {
+  const seen = new Map();
+  for (const r of regions) seen.set(r.site, r.name.toUpperCase());
+  for (const s of catalogue.sites) if (!seen.has(s.site)) seen.set(s.site, s.label || s.site);
+  return [...seen.entries()].map(([site, label]) => ({ site, label }));
+}
+
+function drawTabs() {
+  const nav = $("tabs");
+  [...nav.querySelectorAll(".region-tab")].forEach((a) => a.remove());
+  const route = parseRoute();
+  const site = route.site || (route.panel && panelById.get(route.panel)?.site) || (route.line && lineInfo.get(route.line)?.places[0]?.site);
+  for (const t of siteTabs()) {
+    const a = el("a", "tab region-tab", t.label);
+    a.href = "#/region/" + encodeURIComponent(t.site);
+    a.classList.toggle("active", site === t.site);
+    nav.insertBefore(a, $("tabSettings"));
   }
-  return box;
 }
 
-function leaf(s, incidentId, group) {
-  const c = colorOf(s), m = meter(s);
-  const row = el("div", (group ? "t-line" : "t-line t-nogroup") + (s.bau ? " bau" : ""));
-  const bar = el("div", "bar"), fill = el("div", "fill f-" + c);
-  fill.style.width = Math.max(4, Math.round(m.width * 100)) + "%";
-  bar.append(fill);
-  const meterEl = el("div", "meter"); meterEl.append(bar, el("span", "c-" + c, m.text));
-  const tags = Object.entries(s.group_tags || {}).map(([k, x]) => k + "=" + x).join(", ") || s.metric || "";
-  const hist = el("button", "hist", "▸ history");
-  hist.dataset.line = s.series_id || ""; hist.dataset.incident = incidentId || "";
-  row.append(el("span", "tags", tags),
-    el("span", "sig c-" + c, (s.signal || "line").replace("-", " ") + " " + (s.reason || "")),
-    el("span", "val", s.reason === "silent" ? "—" : withUnit(s.peak_value || 0, s.unit)),
-    el("span", "norm", "normal " + withUnit(s.normal_value || 0, s.unit)),
-    meterEl, hist);
-  return row;
+// ---- anomalies (the incident stream) ---------------------------------------------------------------------------
+const isWaiting = (inc, s) => !s.bau && !s.explanation && (inc.state === "INCIDENT_STATE_OPEN" || inc.state === "INCIDENT_STATE_CALM");
+const isOpen = (inc) => inc.state === "INCIDENT_STATE_OPEN";
+const isCalm = (inc) => inc.state === "INCIDENT_STATE_CALM";
+
+function indexIncident(inc) {
+  const id = inc.incident_id;
+  for (const l of linesOfIncident.get(id) || []) incidentsOfLine.get(l)?.delete(id);
+  const ls = (inc.series || []).map((s) => s.series_id);
+  linesOfIncident.set(id, ls);
+  for (const l of ls) { if (!incidentsOfLine.has(l)) incidentsOfLine.set(l, new Set()); incidentsOfLine.get(l).add(id); }
 }
 
-// ---- a line's past: GET /history, shown under the line (add-incident-history H4) ---------------------------
-document.addEventListener("click", async (e) => {
-  const b = e.target.closest(".hist");
-  if (!b) return;
-  e.stopPropagation();
-  const line = b.closest(".t-line");
-  const shown = line.nextElementSibling && line.nextElementSibling.classList.contains("t-past") ? line.nextElementSibling : null;
-  if (shown) { shown.remove(); b.textContent = "▸ history"; return; }
-  b.textContent = "▾ history";
-  const box = el("div", "t-past", "loading…");
-  line.after(box);
-  try {
-    const r = await fetch("/history?line=" + encodeURIComponent(b.dataset.line) + "&before=" + encodeURIComponent(b.dataset.incident));
-    renderPast(box, await r.json());
-  } catch (err) { box.textContent = "history unavailable"; }
+/** A line's state now: "open" (an open anomaly, not BAU), "waiting" (calm, needs a reason), "bau", or "". */
+function lineState(lineId) {
+  let st = "";
+  for (const id of incidentsOfLine.get(lineId) || []) {
+    const inc = incidents.get(id);
+    if (!inc || inc.state === "INCIDENT_STATE_CLOSED") continue;
+    const s = (inc.series || []).find((x) => x.series_id === lineId);
+    if (!s) continue;
+    if (s.bau) { st = st || "bau"; continue; }
+    if (isOpen(inc)) return "open";
+    if (isCalm(inc) && !s.explanation) st = "waiting";
+  }
+  return st;
+}
+
+function attentionLines() {
+  const open = [], waiting = [];
+  for (const [line] of incidentsOfLine) {
+    const st = lineState(line);
+    if (st === "open") open.push(line); else if (st === "waiting") waiting.push(line);
+  }
+  return { open, waiting };
+}
+
+let attentionDirty = false;
+function markAttention() { if (!attentionDirty) { attentionDirty = true; requestAnimationFrame(drawAttention); } }
+function drawAttention() {
+  attentionDirty = false;
+  const { open, waiting } = attentionLines();
+  const b = $("attention");
+  b.textContent = "● " + open.length + " open · " + waiting.length + (waiting.length === 1 ? " needs" : " need") + " a reason";
+  b.classList.toggle("hot", open.length > 0);
+  b.classList.toggle("warm", !open.length && waiting.length > 0);
+  if (!$("attentionList").hidden) fillAttentionList(open, waiting);
+  refreshBadges();
+  refreshShading();
+}
+$("attention").addEventListener("click", () => {
+  const list = $("attentionList");
+  list.hidden = !list.hidden;
+  $("attention").setAttribute("aria-expanded", String(!list.hidden));
+  if (!list.hidden) { const { open, waiting } = attentionLines(); fillAttentionList(open, waiting); }
 });
-
-function renderPast(box, past) {
-  box.textContent = "";
-  const hours = Math.round((past.windowMs || 172800000) / 3600000);
-  const span = (o) => (o.endedMs && Number(o.endedMs) > 0 ? duration(Number(o.endedMs) - Number(o.startedMs)) : "running");
-  const when = (ms) => (dayFmt.format(Number(ms)) === day ? "today " : dayFmt.format(Number(ms)) + " ") + shortTime(Number(ms));
-  const desc = (o) => when(o.startedMs) + " · " + span(o) + " · " + withUnit(o.peak, o.unit) + " (normal " + withUnit(o.normal, o.unit) + ") · reason: " + (o.reason || "—");
-  box.append(el("div", "p-last", past.last ? "Last time before this: " + desc(past.last) : "No earlier incident in the last " + (hours === 48 ? "2 days" : hours + " h")));
-  if ((past.all || []).length) {
-    box.append(el("div", "p-head", "In the last " + (hours === 48 ? "2 days" : hours + " h") + " (" + past.all.length + "):"));
-    for (const o of past.all) box.append(el("div", "p-item", desc(o)));
-  }
-}
-
-// ---- reasons, one per line (add-incident-resolution S5, add-line-reasons L4) ---------------------------------
-// A box is keyed "incident|line" ("incident|" = every line still waiting). drafts: what was typed, kept when the row
-// is rebuilt by a live update; reasons: sent and waiting for the Detector's answer.
-const drafts = new Map();
-const reasons = new Map();
-const MAX_REASON = 500;
-const keyOf = (incident, line) => incident + "|" + (line || "");
-
-/** Under a line: "BAU", its reason, or (while the incident is not closed) a box to give one. */
-function lineReason(s, v) {
-  if (s.bau) return el("div", "t-reason muted", "BAU (business as usual): no reason needed");
-  if (s.explanation) return el("div", "t-reason", "Reason: " + s.explanation + (Number(s.explained_ms) ? " · given " + shortTime(Number(s.explained_ms)) : ""));
-  if (!v.open) return null;
-  // the only waiting line: its reason is the reason for every waiting line, so it closes the incident at once
-  const only = v.waiting.length === 1;
-  return reasonBox(v.id, only ? "" : s.series_id, only ? "Give reason (closes it)" : "Give reason", "t-reason");
-}
-
-function reasonBox(incident, line, label, extra) {
-  const key = keyOf(incident, line);
-  const box = el("div", "reason-box" + (extra ? " " + extra : ""));
-  box.dataset.key = key; box.dataset.incident = incident; box.dataset.line = line || "";
-  const input = el("textarea", "reason-in");
-  input.maxLength = MAX_REASON; input.rows = 1;
-  input.placeholder = line ? "Why did this line change?" : "Why did this happen?";
-  input.value = drafts.get(key) || "";
-  const counter = el("span", "reason-count", input.value.length + "/" + MAX_REASON);
-  const send = el("button", "reason-send", label);
-  const state = el("span", "reason-state", "");
-  const r = reasons.get(key);
-  if (r) { state.textContent = r.text; state.classList.toggle("bad", !!r.bad); }
-  box.append(input, counter, send, state);
-  return box;
-}
-
-/** Forgets sent reasons and drafts the Detector has answered: the incident closed, or that line now has a reason. */
-function forgetAnswered(v, series) {
-  const answered = new Set(series.filter((s) => s.explanation).map((s) => keyOf(v.id, s.series_id)));
-  if (!v.open || v.waiting.length === 0) answered.add(keyOf(v.id, ""));
-  for (const key of [...reasons.keys(), ...drafts.keys()]) {
-    if (!key.startsWith(v.id + "|")) continue;
-    if (!v.open || answered.has(key)) {
-      reasons.delete(key); drafts.delete(key);
+function fillAttentionList(open, waiting) {
+  const list = $("attentionList");
+  list.textContent = "";
+  const section = (title, lines, cls) => {
+    list.append(el("div", "al-head " + cls, title + " (" + lines.length + ")"));
+    if (!lines.length) list.append(el("div", "muted al-empty", "none"));
+    for (const id of lines) {
+      const info = lineInfo.get(id);
+      const since = Math.min(...[...(incidentsOfLine.get(id) || [])].map((i) => Number(incidents.get(i)?.started_ms || Infinity)));
+      const a = el("a", "al-item");
+      a.href = "#/metric/" + id;
+      const where = info ? info.places[0] : null;
+      a.append(el("span", "al-where", where ? (siteName(where.site) + " · " + where.dashboard.title + " › " + where.panel.title) : id),
+        el("span", "al-tags", info ? (tagsText(info.line.tags) || info.line.metric) : ""),
+        el("span", "muted", isFinite(since) ? "since " + shortTime(since) : ""));
+      a.addEventListener("click", () => { list.hidden = true; });
+      list.append(a);
     }
+  };
+  section("Open", open, "hot");
+  section("Needs a reason", waiting, "warm");
+}
+const siteName = (site) => (siteTabs().find((t) => t.site === site) || { label: site }).label;
+
+// ---- the stream: snapshot, then live changes; newest sequence wins ---------------------------------------------
+let staging = null, caughtUp = false, lastChangeAt = 0;
+const newlyOpened = [];
+function onLine(text) {
+  const msg = JSON.parse(text);
+  if (msg.snapshot_complete) {
+    if (msg.display_zones) setDisplayZones(msg.display_zones);
+    incidents.clear(); linesOfIncident.clear(); incidentsOfLine.clear();
+    for (const ev of staging.values()) apply(ev);
+    staging = null; caughtUp = true;
+    markAttention(); rerenderMetricAnomalies();
+    return;
   }
+  lastChangeAt = Date.now();
+  if (staging) { const prev = staging.get(msg.incident_id); if (!prev || Number(msg.sequence) > Number(prev.sequence)) staging.set(msg.incident_id, msg); return; }
+  apply(msg);
+  if (msg.type === "EVENT_TYPE_OPENED" && caughtUp && (msg.incident.series || []).some((s) => !s.bau)) newlyOpened.push(msg.incident);
+  if (newlyOpened.length) notify(newlyOpened.splice(0));
+  markAttention(); rerenderMetricAnomalies(); clearAnswered(msg.incident);
+}
+function apply(ev) {
+  const inc = ev.incident || {};
+  const old = incidents.get(ev.incident_id);
+  if (old && Number(old._seq) >= Number(ev.sequence)) return;
+  inc._seq = Number(ev.sequence);
+  inc.incident_id = inc.incident_id || ev.incident_id;
+  incidents.set(ev.incident_id, inc);
+  indexIncident(inc);
 }
 
-function showReasonState(key, text, bad) {
-  const r = reasons.get(key) || {};
-  r.text = text; r.bad = bad; reasons.set(key, r);
-  const box = document.querySelector('.reason-box[data-key="' + CSS.escape(key) + '"]');
-  if (box) { const s = box.querySelector(".reason-state"); s.textContent = text; s.classList.toggle("bad", !!bad); }
-}
-document.addEventListener("input", (e) => {
-  if (!e.target.classList.contains("reason-in")) return;
-  const key = e.target.closest(".reason-box").dataset.key;
-  drafts.set(key, e.target.value);
-  e.target.parentElement.querySelector(".reason-count").textContent = e.target.value.length + "/" + MAX_REASON;
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && e.target.classList && e.target.classList.contains("reason-in")) {
-    e.preventDefault(); e.target.parentElement.querySelector(".reason-send").click();
-  }
-});
-document.addEventListener("click", async (e) => {
-  const b = e.target.closest(".reason-send");
-  if (!b) return;
-  e.stopPropagation();
-  const box = b.closest(".reason-box"), key = box.dataset.key;
-  const text = (drafts.get(key) || "").trim();
-  if (!text || text.length > MAX_REASON) { showReasonState(key, "a reason of 1 to " + MAX_REASON + " characters is needed", true); return; }
-  showReasonState(key, "saving…", false);
-  const body = { reason: text };
-  if (box.dataset.line) body.line = box.dataset.line;
-  try {
-    const r = await fetch("/incidents/" + encodeURIComponent(box.dataset.incident) + "/reason",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.status === 202) { reasons.get(key).deadline = Date.now() + 10000; return; }   // the Detector's event clears it
-    const problem = await r.json().catch(() => ({}));
-    showReasonState(key, "not saved: " + (problem.problem || "HTTP " + r.status), true);
-  } catch (err) { showReasonState(key, "not saved: the Notifier cannot be reached", true); }
-});
-
-// ---- ordered lists: binary search, O(log n) to find, one DOM move ----------------------------------------
-// open first (newest start), then calm (newest calm), then closed (newest end)
-const order = (v) => (!v.open ? 2e15 - v.endMs : v.calm ? 1e15 - v.endMs : -v.startMs);
-const idsOf = (v) => (!v.open ? closedIds : v.calm ? calmIds : openIds);
-const listOf = (v) => (!v.open ? "closedList" : v.calm ? "calmList" : "openList");
-function position(ids, v) {
-  let lo = 0, hi = ids.length;
-  const key = order(v);
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (order(incidents.get(ids[mid])) <= key) lo = mid + 1; else hi = mid; }
-  return lo;
-}
-function insertSorted(v) {
-  const ids = idsOf(v);
-  const at = position(ids, v);
-  const list = $(listOf(v));
-  const next = at < ids.length ? incidents.get(ids[at]).row : null;
-  ids.splice(at, 0, v.id);
-  list.insertBefore(v.row, next);
-}
-function remove(v) {
-  const ids = idsOf(v);
-  const at = ids.indexOf(v.id);                // the arrays hold at most a day's incidents
-  if (at >= 0) ids.splice(at, 1);
-  v.row.remove();
-  incidents.delete(v.id);
-  count(v, -1);
-}
-
-// ---- incremental counters -------------------------------------------------------------------------------
-function count(v, d) {
-  groupCounts.set(v.label, (groupCounts.get(v.label) || 0) + d);
-  if (groupCounts.get(v.label) <= 0) groupCounts.delete(v.label);
-  if (d > 0 && !v.open) longestMs = Math.max(longestMs, v.endMs - v.startMs);   // can only grow during a day
-  groupsDirty = true; countsDirty = true;
-}
-function refreshCounts(force) {
-  if (!countsDirty && !force) return;
-  countsDirty = false;
-  $("cToday").textContent = incidents.size;
-  $("cOpen").textContent = openIds.length;
-  $("hCalm").textContent = "(" + calmIds.length + ")";
-  $("calmSection").classList.toggle("hidden", calmIds.length === 0);
-  $("cClosed").textContent = closedIds.length;
-  $("cLongest").textContent = longestMs ? duration(longestMs) : "–";
-  $("hOpen").textContent = openIds.length ? "(" + openIds.length + ")" : "";
-  $("hClosed").textContent = closedIds.length ? "(" + closedIds.length + ")" : "";
-  $("quiet").classList.toggle("show", openIds.length === 0);
-  $("dayTitle").textContent = "Today · " + (day || "…") + " · " + zone;
-  if (groupsDirty) {
-    groupsDirty = false;
-    const top = [...groupCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);  // g is about 30: O(g log g)
-    const box = $("groups");
-    box.textContent = "";
-    for (const [label, n] of top) { const b = el("button", "chip", label + " " + n); b.dataset.filter = label; box.append(b); }
-  }
-}
-
-// ---- filter: precomputed text, debounced, toggles a class -----------------------------------------------
-let filterTimer = 0;
-$("filter").addEventListener("input", (e) => {
-  clearTimeout(filterTimer);
-  filterTimer = setTimeout(() => { filterText = e.target.value.trim().toLowerCase(); applyFilter(); }, 120);
-});
-function applyFilter() {
-  for (const v of incidents.values()) v.row.classList.toggle("hidden", !!filterText && !v.search.includes(filterText));
-}
-document.addEventListener("keydown", (e) => {
-  if (e.target.closest && e.target.closest("input, textarea") && e.target !== $("filter")) return;   // typing a reason
-  if (e.key === "/" && document.activeElement !== $("filter")) { e.preventDefault(); $("filter").focus(); }
-  if (e.key === "Escape") { $("filter").value = ""; filterText = ""; applyFilter(); $("filter").blur(); }
-});
-
-// ---- one click listener for every row (event delegation); lazy details ---------------------------------
-$("closedList").addEventListener("click", (e) => {
-  if (e.target.closest("a") || e.target.closest(".lines") || e.target.closest(".hist")) return;
-  const row = e.target.closest(".inc");
-  if (!row) return;
-  const v = incidents.get(row.dataset.id);
-  if (!v) return;
-  v.expanded = !v.expanded;
-  row.classList.toggle("expanded", v.expanded);
-  if (v.expanded) { v.detail = el("div"); v.detail.append(lines(v.ev.incident.series || [], v)); row.append(v.detail); }
-  else if (v.detail) { v.detail.remove(); v.detail = null; }       // freed when collapsed
-});
-$("groups").addEventListener("click", (e) => {
-  const b = e.target.closest(".chip");
-  if (!b) return;
-  $("filter").value = b.dataset.filter; filterText = b.dataset.filter.toLowerCase(); applyFilter();
-});
-
-// ---- one timer: durations of open rows, "last change" ----------------------------------------------------
-setInterval(() => {
-  const now = Date.now();
-  for (const id of openIds) { const v = incidents.get(id); v.durEl.textContent = "since " + time(v.startMs) + " · " + duration(now - v.startMs); }
-  for (const [id, r] of reasons) if (r.deadline && now > r.deadline) { r.deadline = 0; showReasonState(id, "not saved: no answer from the Detector yet (it will apply it when it can, or send again)", true); }
-  $("lastChange").textContent = lastChangeAt ? "last change " + duration(now - lastChangeAt) + " ago" : "";
-}, 1000);
-
-// ---- notifications: one per burst, only for new incidents after the snapshot -----------------------------
-function loadSettings() {
-  try { return JSON.parse(localStorage.getItem("notifier") || "{}"); } catch (e) { return {}; }
-}
-function saveSettings() { try { localStorage.setItem("notifier", JSON.stringify(settings)); } catch (e) { /* private window */ } }
+// ---- notifications --------------------------------------------------------------------------------------------
+const toggles = (() => { try { return JSON.parse(store.get("notifier") || "{}"); } catch (e) { return {}; } })();
 function showToggles() {
-  $("notifyBtn").textContent = "🔔 " + (settings.notify ? "on" : "off");
-  $("notifyBtn").classList.toggle("on", !!settings.notify);
-  $("soundBtn").textContent = "🔊 " + (settings.sound ? "on" : "off");
-  $("soundBtn").classList.toggle("on", !!settings.sound);
+  $("notifyBtn").textContent = "🔔 " + (toggles.notify ? "on" : "off"); $("notifyBtn").classList.toggle("on", !!toggles.notify);
+  $("soundBtn").textContent = "🔊 " + (toggles.sound ? "on" : "off"); $("soundBtn").classList.toggle("on", !!toggles.sound);
 }
 $("notifyBtn").addEventListener("click", async () => {
-  if (!settings.notify && "Notification" in window && Notification.permission !== "granted") {
-    if ((await Notification.requestPermission()) !== "granted") return;
-  }
-  settings.notify = !settings.notify; saveSettings(); showToggles();
+  if (!toggles.notify && "Notification" in window && Notification.permission !== "granted") { if ((await Notification.requestPermission()) !== "granted") return; }
+  toggles.notify = !toggles.notify; store.set("notifier", JSON.stringify(toggles)); showToggles();
 });
-$("soundBtn").addEventListener("click", () => { settings.sound = !settings.sound; saveSettings(); showToggles(); if (settings.sound) beep(); });
+$("soundBtn").addEventListener("click", () => { toggles.sound = !toggles.sound; store.set("notifier", JSON.stringify(toggles)); showToggles(); if (toggles.sound) beep(); });
 showToggles();
 let audio;
 function beep() {
@@ -527,71 +277,528 @@ function beep() {
     o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.35);
   } catch (e) { /* no audio */ }
 }
-function notify(views) {
-  if (settings.sound) beep();
-  if (!settings.notify || !("Notification" in window) || Notification.permission !== "granted") return;
-  const title = views.length === 1 ? views[0].title : views.length + " new incidents";
-  const body = views.length === 1 ? "since " + time(views[0].startMs) : views.map((v) => v.title).slice(0, 4).join("\n");
-  try { new Notification(title, { body, tag: "incidents" }); } catch (e) { /* not allowed here */ }
+function notify(list) {
+  if (toggles.sound) beep();
+  if (!toggles.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+  const title = list.length === 1 ? list[0].title : list.length + " new anomalies";
+  try { new Notification(title, { body: list.length === 1 ? "since " + shortTime(list[0].started_ms) : list.map((i) => i.title).slice(0, 4).join("\n"), tag: "anomalies" }); } catch (e) { /* not allowed */ }
 }
 
-// ---- connection: reconnect with backoff, catch up -----------------------------------------------------------
+// ---- connection ---------------------------------------------------------------------------------------------------
 let attempt = 0;
 async function connect() {
   setConn("connecting");
   let cfg = { rsocketPort: 7104, route: "incidents.live" };
-  try { cfg = await (await fetch("page-config.json", { cache: "no-store" })).json(); } catch (e) { /* use defaults */ }
-  staging = new Map();
-  caughtUp = false;
+  try { cfg = await (await fetch("page-config.json", { cache: "no-store" })).json(); } catch (e) { /* defaults */ }
+  staging = new Map(); caughtUp = false;
   openStream("ws://" + location.hostname + ":" + cfg.rsocketPort, cfg.route, {
     onLine,
     onState(state, reason) {
       if (state === "connected") { attempt = 0; setConn("connected"); return; }
-      staging = null;
-      setConn("reconnecting", reason);
-      const wait = [1000, 2000, 4000][attempt] || 10000;              // 1, 2, 4, then every 10 s
-      attempt++;
-      setTimeout(connect, reason === "completed" ? 200 : wait);      // a normal end (midnight, zone): at once
+      staging = null; setConn("reconnecting", reason);
+      const wait = [1000, 2000, 4000][attempt] || 10000; attempt++;
+      setTimeout(connect, reason === "completed" ? 200 : wait);
     },
   });
 }
-function setConn(state, reason) {
-  const p = $("connPill");
-  p.textContent = state; p.className = "pill " + state; p.title = reason || "";
-}
-connect();
+function setConn(state, reason) { const p = $("connPill"); p.textContent = state; p.className = "pill " + state; p.title = reason || ""; }
+setInterval(() => { $("lastChange").textContent = lastChangeAt ? "last change " + duration(Date.now() - lastChangeAt) + " ago" : ""; }, 1000);
 
-// ---- test hook (task 4.2): n incidents through the normal code path, then a burst, then the filter ----------
-window.__bench = async function (n = 2000, burst = 50) {
-  const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
-  const t0 = Date.parse("2026-11-16T00:00:00Z");
-  const make = (i, seq, closed) => ({
-    event_id: "b" + i + "-" + seq, incident_id: "bench-" + i, sequence: String(seq), type: closed ? "EVENT_TYPE_CLOSED" : "EVENT_TYPE_OPENED",
-    incident: { incident_id: "bench-" + i, state: closed ? "INCIDENT_STATE_CLOSED" : "INCIDENT_STATE_OPEN",
-      title: ["/v1/invoices", "billing", "orders", "upstream billing-core", "/v1/telemetry"][i % 5] + ": latency up, errors up",
-      started_ms: String(t0 + i * 30000), ended_ms: closed ? String(t0 + i * 30000 + 180000) : undefined,
-      series: [{ series_id: "s" + i, metric: "lab.api.latency", unit: "ms", signal: "latency", reason: "up", peak_value: 1200 + i, normal_value: 138,
-          dashboard_title: "Shop · Payments", panel_path: "API Metrics", panel_title: "Latencies",
-          group_tags: { api: i % 2 ? "/v1/invoices" : "/accounts/_accountid_/devices/_deviceid_/profiles/_profileid_/pause/schedules/_scheduleid_/exceptions/_exceptionid_/history" } },
-        { series_id: "e" + i, metric: "lab.api.request.count", unit: "requests", signal: "traffic", reason: "down", peak_value: 0, normal_value: 5,
-          dashboard_title: "Shop · Payments", panel_path: "API Gateway Metrics", panel_title: "Request Counts by Status Code", group_tags: { status: "200" } }] } });
-  const snap = new Map();
-  for (let i = 0; i < n; i++) snap.set("bench-" + i, make(i, 3, i < n - 5));
-  const a = performance.now();
-  replaceAll(snap);
-  void document.body.offsetHeight;            // force layout now: measures the real work, not frame throttling
-  const firstPaint = performance.now() - a;
-  await frame();
-  for (let i = 0; i < burst; i++) onLine(JSON.stringify(make(n - 1 - (i % 5), 10 + i, i % 2 === 0)));
-  const b = performance.now();
-  flush();
-  const burstMs = performance.now() - b;
-  const c = performance.now();
-  filterText = "billing"; applyFilter();
-  const filterMs = performance.now() - c;
-  const shown = [...incidents.values()].filter((v) => !v.row.classList.contains("hidden")).length;
-  filterText = ""; applyFilter(); $("filter").value = "";
+// ---- charts: created near the screen, released far from it; live values for created charts only -----------------
+const charts = new Map();             // chart element -> {chart, lines: [ids], panelId, kind}
+const series = new Map();             // line id -> [[t, v], ...] for the current range (shared by every chart of the line)
+let seriesRange = "";
+const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+const PALETTE = ["#2f6fe0", "#d98a00", "#1f9d55", "#7a4fd6", "#d93a3a", "#0e9aa7", "#b5487d", "#6b7385", "#8c6d1f", "#3e8e41"];
+
+const near = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) createChart(e.target); }, { rootMargin: "300px" });
+const far = new IntersectionObserver((entries) => { for (const e of entries) if (!e.isIntersecting) releaseChart(e.target); }, { rootMargin: "2000px" });
+
+function watchChart(box, lines, panelId, kind) {
+  box._spec = { lines, panelId, kind };
+  near.observe(box); far.observe(box);
+}
+function unwatchAll(root) {
+  for (const box of root.querySelectorAll(".chart")) { near.unobserve(box); far.unobserve(box); releaseChart(box); }
+}
+
+function topLines(lines, n) {
+  if (lines.length <= n) return lines;
+  const peak = (id) => { let m = -Infinity; for (const p of series.get(id) || []) if (p[1] > m) m = p[1]; return m; };
+  return [...lines].sort((a, b) => peak(b) - peak(a)).slice(0, n);
+}
+
+function chartOption(spec) {
+  const shown = spec.kind === "small" ? topLines(spec.lines, catalogue.lines_per_panel || 20) : spec.lines;
+  const unit = lineInfo.get(shown[0])?.line.unit;
+  const now = Date.now(), from = now - rangeMs(range);
+  const areas = shadingFor(spec.lines, from);
+  const s = shown.map((id, i) => {
+    const info = lineInfo.get(id);
+    return {
+      id, name: info ? (tagsText(info.line.tags) || info.line.metric) : id, type: "line", showSymbol: false, smooth: false,
+      data: series.get(id) || [], lineStyle: { width: spec.kind === "metric" ? 2 : 1.2 }, color: PALETTE[i % PALETTE.length],
+      emphasis: { focus: "series" }, animation: false,
+      markArea: i === 0 && areas.length ? { silent: false, data: areas, label: { show: false } } : undefined,
+    };
+  });
+  const axis = dark() ? "#8d95a6" : "#6b7385", grid = dark() ? "#2a303b" : "#eceff4";
+  return {
+    animation: false, useUTC: true,
+    grid: { left: 62, right: 12, top: 10, bottom: spec.kind === "small" ? 22 : 28 },
+    tooltip: { trigger: "axis", confine: true, order: "valueDesc", valueFormatter: (v) => withUnit(v, unit),
+      axisPointer: { type: "line" }, appendToBody: false },
+    xAxis: { type: "time", min: from, max: now, axisLabel: { color: axis, hideOverlap: true }, axisLine: { lineStyle: { color: grid } }, splitLine: { show: false } },
+    yAxis: { type: "value", scale: true, axisLabel: { color: axis, formatter: (v) => withUnit(v, unit) }, splitLine: { lineStyle: { color: grid } } },
+    series: s,
+  };
+}
+
+/**
+ * Shaded times of the anomalies on these lines: red where one is open or waiting, grey for BAU and closed ones.
+ * Overlapping times are merged (sorted sweep, O(n log n)), so many anomalies never stack into a solid block.
+ */
+function shadingFor(lines, from) {
+  const spans = { live: [], past: [] }, seen = new Set(), names = { live: [], past: [] };
+  for (const l of lines) {
+    for (const id of incidentsOfLine.get(l) || []) {
+      if (seen.has(id)) continue; seen.add(id);
+      const inc = incidents.get(id); if (!inc) continue;
+      const start = Math.max(from, Number(inc.started_ms)), end = Number(inc.ended_ms) || Date.now();
+      if (end < from) continue;
+      const allBau = (inc.series || []).every((s) => s.bau);
+      const kind = inc.state !== "INCIDENT_STATE_CLOSED" && !allBau ? "live" : "past";
+      spans[kind].push([start, end]); names[kind].push(inc.title);
+    }
+  }
+  const out = [];
+  for (const kind of ["past", "live"]) {
+    const s = spans[kind].sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const x of s) { const last = merged[merged.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else merged.push([x[0], x[1]]); }
+    const label = names[kind].length === 1 ? names[kind][0] : names[kind].length + " anomalies";
+    for (const [a, b] of merged) out.push([{ name: label, xAxis: a, itemStyle: { color: kind === "live" ? "rgba(217,58,58,0.10)" : "rgba(138,145,158,0.12)" } }, { xAxis: b }]);
+  }
+  return out;
+}
+
+function createChart(box) {
+  if (charts.has(box) || !box.isConnected || !box._spec) return;
+  const chart = echarts.init(box, null, { renderer: "canvas" });
+  chart.setOption(chartOption(box._spec));
+  charts.set(box, Object.assign({ chart }, box._spec));
+  chart.on("click", (p) => { if (p.seriesId && box._spec.kind !== "metric") location.hash = "#/metric/" + p.seriesId; });
+  liveChanged();
+}
+function releaseChart(box) {
+  const c = charts.get(box);
+  if (!c) return;
+  c.chart.dispose(); charts.delete(box); liveChanged();
+}
+function redraw(filter) {
+  for (const [box, c] of charts) if (!filter || c.lines.some((l) => filter.has(l))) c.chart.setOption(chartOption(c), { replaceMerge: ["series"] });
+}
+function refreshShading() { redraw(null); }
+window.addEventListener("resize", () => { for (const c of charts.values()) c.chart.resize(); });
+
+// live: one EventSource for the lines of the charts that exist (re-opened, debounced, when that set changes)
+let liveSource = null, liveKey = "", liveTimer = 0;
+function liveChanged() { clearTimeout(liveTimer); liveTimer = setTimeout(openLive, 500); }
+function openLive() {
+  const lines = new Set();
+  if (LIVE_RANGES.has(range)) for (const c of charts.values()) c.lines.forEach((l) => lines.add(l));
+  const key = [...lines].sort().join(",");
+  if (key === liveKey) return;
+  liveKey = key;
+  if (liveSource) { liveSource.close(); liveSource = null; }
+  if (!lines.size) return;
+  liveSource = new EventSource("/dash/live?lines=" + key);
+  liveSource.addEventListener("points", (e) => {
+    const data = JSON.parse(e.data), changed = new Set(), from = Date.now() - rangeMs(range);
+    for (const [id, pts] of Object.entries(data)) {
+      const cur = series.get(id) || [];
+      const first = pts.length ? pts[0][0] : Infinity;
+      const kept = cur.filter((p) => p[0] >= from && p[0] < first);       // newer points replace the window they cover
+      series.set(id, kept.concat(pts));
+      changed.add(id);
+    }
+    if (changed.size) redraw(changed);
+  });
+}
+
+async function loadRange(url, lines) {
+  const data = await getJson(url);
+  for (const [id, pts] of Object.entries(data.lines || {})) series.set(id, pts);
+  for (const l of lines) if (!data.lines || !data.lines[l]) series.set(l, []);
+  return data;
+}
+
+// ---- router ------------------------------------------------------------------------------------------------------
+function parseRoute() {
+  const h = location.hash;
+  let m;
+  if ((m = /^#\/region\/(.+)$/.exec(h))) return { page: "region", site: decodeURIComponent(m[1]) };
+  if ((m = /^#\/panel\/([0-9a-f]+)$/.exec(h))) return { page: "panel", panel: m[1] };
+  if ((m = /^#\/metric\/([0-9a-f]+)$/.exec(h))) return { page: "metric", line: m[1] };
+  if (h === "#settings") return { page: "settings" };
+  return { page: "home" };
+}
+let current = null;
+async function route() {
+  const r = parseRoute();
+  if (r.page === "settings") { leave(); drawTabs(); return; }
+  if (r.page === "home") { const first = siteTabs()[0]; if (first) { location.replace("#/region/" + encodeURIComponent(first.site)); return; } }
+  leave();
+  drawTabs();
+  const main = $("incidentsView");
+  main.textContent = "";
+  current = r;
+  if (r.page === "region") drawRegion(main, r.site);
+  else if (r.page === "panel") drawPanel(main, r.panel);
+  else if (r.page === "metric") drawMetric(main, r.line);
+  else main.append(el("div", "empty", catalogue.problem ? "Dashboards unavailable: " + catalogue.problem : "No dashboards yet: add a region and its dashboards in Settings."));
+}
+function leave() { unwatchAll($("incidentsView")); series.clear(); seriesRange = ""; liveChanged(); current = null; }
+window.addEventListener("hashchange", route);
+
+function rangePicker(onChange) {
+  const box = el("div", "range");
+  for (const r of catalogue.ranges) {
+    const b = el("button", "range-btn" + (r === range ? " on" : ""), r + (LIVE_RANGES.has(r) ? " ●" : ""));
+    b.type = "button"; b.title = LIVE_RANGES.has(r) ? "10-second values, live" : "per-minute values";
+    b.addEventListener("click", () => { range = r; store.set("dash-range", r); onChange(); });
+    box.append(b);
+  }
+  box.append(el("span", "muted range-note", "Each 10-second step shows its highest value, so peaks can be higher than on Datadog's own graphs."));
+  return box;
+}
+function breadcrumb(parts) {
+  const nav = el("nav", "crumbs");
+  parts.forEach((p, i) => {
+    if (i) nav.append(el("span", "crumb-sep", "›"));
+    if (p.href) { const a = el("a", null, p.text); a.href = p.href; nav.append(a); } else nav.append(el("span", "crumb-here", p.text));
+  });
+  return nav;
+}
+
+// ---- the region page -----------------------------------------------------------------------------------------
+function drawRegion(main, site) {
+  const s = catalogue.sites.find((x) => x.site === site);
+  main.append(el("h1", "page-title", siteName(site) + " · " + site));
+  main.append(rangePicker(() => route()));
+  if (!s || !s.dashboards.length) { main.append(el("div", "empty", "No dashboards collected for this region yet.")); return; }
+  for (const d of s.dashboards) main.append(dashboardCard(d));
+}
+
+function dashboardCard(d) {
+  const card = el("section", "dash");
+  card.dataset.dash = d.id;
+  const head = el("button", "dash-head");
+  head.type = "button";
+  const open = store.get("dash-open:" + d.id) === "1";
+  head.setAttribute("aria-expanded", String(open));
+  head.append(el("span", "chev", open ? "▾" : "▸"), el("span", "dash-title", d.title), el("span", "muted", d.panelCount + " panels · " + d.lineCount + " lines"),
+    el("span", "badge hot"), el("span", "badge warm"));
+  const body = el("div", "dash-body");
+  card.append(head, body);
+  head.addEventListener("click", () => {
+    const now = head.getAttribute("aria-expanded") !== "true";
+    store.set("dash-open:" + d.id, now ? "1" : "0");
+    head.setAttribute("aria-expanded", String(now)); head.querySelector(".chev").textContent = now ? "▾" : "▸";
+    if (now) expand(d, body); else { unwatchAll(body); body.textContent = ""; }
+  });
+  badges(card, d);
+  if (open) expand(d, body);
+  return card;
+}
+
+function dashLines(d) { const out = new Set(); d.groups.forEach((g) => g.panels.forEach((p) => p.lines.forEach((l) => out.add(l.id)))); return out; }
+function badges(card, d) {
+  let open = 0, waiting = 0;
+  for (const l of dashLines(d)) { const st = lineState(l); if (st === "open") open++; else if (st === "waiting") waiting++; }
+  const [hot, warm] = card.querySelectorAll(".dash-head .badge");
+  hot.textContent = open ? "● " + open + " open" : ""; warm.textContent = waiting ? "● " + waiting + " need" + (waiting === 1 ? "s" : "") + " a reason" : "";
+  for (const p of card.querySelectorAll(".panel")) p.classList.toggle("red-edge", p._lines.some((l) => lineState(l) === "open"));
+}
+function refreshBadges() {
+  for (const card of document.querySelectorAll(".dash")) { const d = dashById.get(card.dataset.dash); if (d) badges(card, d.dashboard); }
+}
+
+async function expand(d, body) {
+  body.textContent = "";
+  const status = el("div", "muted", "loading…");
+  body.append(status);
+  try { await loadRange("/dash/range?dashboard=" + encodeURIComponent(d.id) + "&range=" + range + "&width=" + Math.max(200, Math.round(innerWidth / 3)), dashLines(d)); status.remove(); }
+  catch (e) { status.textContent = "history unavailable (" + e.message + "); live values and anomalies still arrive"; status.className = "s-warn"; }
+  for (const g of d.groups) {
+    const gBox = el("div", "group");
+    const gOpen = store.get("group-open:" + d.id + "|" + g.title) !== "0";
+    const gHead = el("button", "group-head", (gOpen ? "▾ " : "▸ ") + (g.title || "Panels") + " (" + g.panels.length + ")");
+    gHead.type = "button";
+    const grid = el("div", "panels");
+    gBox.append(gHead, grid);
+    const fill = () => { for (const p of g.panels) grid.append(panelCard(p)); };
+    gHead.addEventListener("click", () => {
+      const now = grid.childElementCount === 0;
+      store.set("group-open:" + d.id + "|" + g.title, now ? "1" : "0");
+      gHead.textContent = (now ? "▾ " : "▸ ") + (g.title || "Panels") + " (" + g.panels.length + ")";
+      if (now) fill(); else { unwatchAll(grid); grid.textContent = ""; }
+    });
+    if (gOpen) fill();
+    body.append(gBox);
+  }
+  badges(body.closest(".dash"), d);
+}
+
+function panelCard(p) {
+  const box = el("div", "panel");
+  box._lines = p.lines.map((l) => l.id);
+  const head = el("a", "panel-title", p.title);
+  head.href = "#/panel/" + p.id;
+  const chart = el("div", "chart small");
+  box.append(head, chart);
+  const n = catalogue.lines_per_panel || 20;
+  if (p.lines.length > n) { const more = el("a", "muted more", "+ " + (p.lines.length - n) + " more"); more.href = "#/panel/" + p.id; box.append(more); }
+  box.classList.toggle("red-edge", box._lines.some((l) => lineState(l) === "open"));
+  watchChart(chart, box._lines, p.id, "small");
+  return box;
+}
+
+// ---- the panel page ----------------------------------------------------------------------------------------------
+async function drawPanel(main, panelId) {
+  const info = panelById.get(panelId);
+  if (!info) { main.append(el("div", "empty", "This panel is not in the catalogue (yet).")); return; }
+  const { panel, dashboard, group, site } = info;
+  main.append(breadcrumb([{ text: siteName(site), href: "#/region/" + encodeURIComponent(site) }, { text: dashboard.title }, { text: group.title || "Panels" }, { text: panel.title }]));
+  main.append(el("h1", "page-title", panel.title));
+  main.append(rangePicker(() => route()));
+  const chart = el("div", "chart big");
+  main.append(chart);
+  const lines = panel.lines.map((l) => l.id);
+  try { await loadRange("/dash/panel?panel=" + panelId + "&range=" + range + "&width=1000", lines); }
+  catch (e) { main.insertBefore(el("div", "s-warn", "history unavailable (" + e.message + ")"), chart); }
+  if (current?.panel !== panelId) return;
+  watchChart(chart, lines, panelId, "big");
+  const search = el("input", "legend-search"); search.type = "search"; search.placeholder = "filter lines…";
+  const table = el("table", "legend");
+  main.append(search, table);
+  let sortKey = "newest";
+  const newest = (id) => { const s = series.get(id) || []; return s.length ? s[s.length - 1][1] : null; };
+  const peakOf = (id) => { let m = null; for (const p of series.get(id) || []) if (m == null || p[1] > m) m = p[1]; return m; };
+  const draw = () => {
+    table.textContent = "";
+    const hr = el("tr");
+    for (const [k, t] of [["name", "Line"], ["state", "State"], ["newest", "Newest"], ["peak", "Peak in range"]]) {
+      const th = el("th", k === sortKey ? "on" : null, t); th.addEventListener("click", () => { sortKey = k; draw(); }); hr.append(th);
+    }
+    table.append(hr);
+    const q = search.value.trim().toLowerCase();
+    const rows = panel.lines.filter((l) => !q || (tagsText(l.tags) + " " + l.metric).toLowerCase().includes(q));
+    const val = (l) => sortKey === "name" ? tagsText(l.tags) : sortKey === "state" ? lineState(l.id) : sortKey === "newest" ? newest(l.id) ?? -Infinity : peakOf(l.id) ?? -Infinity;
+    rows.sort((a, b) => sortKey === "name" || sortKey === "state" ? String(val(a)).localeCompare(String(val(b))) : val(b) - val(a));
+    for (const l of rows) {
+      const tr = el("tr");
+      const a = el("a", null, tagsText(l.tags) || l.metric); a.href = "#/metric/" + l.id;
+      const st = lineState(l.id);
+      const td = el("td"); td.append(a);
+      tr.append(td, el("td", "state " + st, st === "open" ? "● open" : st === "waiting" ? "● needs a reason" : st === "bau" ? "BAU" : ""),
+        el("td", "num", withUnit(newest(l.id), l.unit)), el("td", "num", withUnit(peakOf(l.id), l.unit)));
+      table.append(tr);
+    }
+  };
+  search.addEventListener("input", draw);
+  draw();
+}
+
+// ---- the metric page -----------------------------------------------------------------------------------------------
+async function drawMetric(main, lineId) {
+  const info = lineInfo.get(lineId);
+  if (!info) { main.append(el("div", "empty", "This metric is not in the catalogue (yet).")); return; }
+  const { line, places } = info;
+  const p0 = places[0];
+  main.append(breadcrumb([{ text: siteName(p0.site), href: "#/region/" + encodeURIComponent(p0.site) }, { text: p0.dashboard.title },
+    { text: p0.group.title || "Panels" }, { text: p0.panel.title, href: "#/panel/" + p0.panel.id }, { text: tagsText(line.tags) || line.metric }]));
+  main.append(el("h1", "page-title", (tagsText(line.tags) || line.metric)));
+  main.append(rangePicker(() => route()));
+  const top = el("div", "metric-top");
+  const chart = el("div", "chart metric");
+  const details = el("dl", "details");
+  top.append(chart, details);
+  main.append(top);
+  try { await loadRange("/dash/line?id=" + lineId + "&range=" + range + "&width=1000", [lineId]); }
+  catch (e) { top.insertBefore(el("div", "s-warn", "history unavailable (" + e.message + ")"), chart); }
+  if (current?.line !== lineId) return;
+  watchChart(chart, [lineId], p0.panel.id, "metric");
+  const pts = series.get(lineId) || [];
+  const last = pts.length ? pts[pts.length - 1] : null;
+  const newestIncident = [...(incidentsOfLine.get(lineId) || [])].map((i) => incidents.get(i)).filter(Boolean)
+    .sort((a, b) => Number(b.started_ms) - Number(a.started_ms))[0];
+  const s = newestIncident ? (newestIncident.series || []).find((x) => x.series_id === lineId) : null;
+  const add = (k, v) => { details.append(el("dt", null, k), el("dd", null, v)); };
+  add("Metric", line.metric);
+  add("Question", line.query || "—");
+  add("Tags", tagsText(line.tags) || "—");
+  add("Shown on", places.map((p) => p.dashboard.title + " › " + (p.group.title ? p.group.title + " › " : "") + p.panel.title).join("\n"));
+  add("Region", siteName(p0.site) + " (" + p0.site + ")");
+  add("Unit · kind", (line.unit || "—") + " · " + (line.kind || "—"));
+  add("Judged as", s ? s.signal + (s.bau ? " (BAU)" : "") : "the rule for " + (line.kind || "its kind") + " (no anomaly yet)");
+  add("Normal", s ? withUnit(s.normal_value, line.unit) + " (at its last anomaly)" : "—");
+  add("Newest value", last ? withUnit(last[1], line.unit) + " · " + shortTime(last[0]) : "no value in this range");
+  const below = el("section", "anomalies");
+  below.append(el("h2", null, "Anomalies"));
+  const list = el("div", "anom-list");
+  below.append(list);
+  main.append(below);
+  main._anomalies = { list, lineId };
+  await drawAnomalies(list, lineId);
+}
+
+let pastCache = { line: "", data: null, at: 0 };
+async function drawAnomalies(list, lineId) {
+  if (pastCache.line !== lineId || Date.now() - pastCache.at > 15000) {
+    try { pastCache = { line: lineId, data: await getJson("/history?line=" + lineId), at: Date.now() }; }
+    catch (e) { pastCache = { line: lineId, data: { all: [] }, at: Date.now() }; }
+  }
+  const byId = new Map();
+  for (const o of pastCache.data.all || []) byId.set(o.incidentId, { id: o.incidentId, title: o.title, start: Number(o.startedMs), end: Number(o.endedMs), signal: o.signal,
+    direction: o.direction, peak: o.peak, normal: o.normal, unit: o.unit, reason: o.reason, state: Number(o.endedMs) ? "closed" : "open" });
+  for (const id of incidentsOfLine.get(lineId) || []) {
+    const inc = incidents.get(id); if (!inc) continue;
+    const s = (inc.series || []).find((x) => x.series_id === lineId); if (!s) continue;
+    byId.set(id, { id, title: inc.title, start: Number(inc.started_ms), end: Number(inc.ended_ms), signal: s.signal, direction: s.reason, peak: s.peak_value,
+      normal: s.normal_value, unit: s.unit, reason: s.bau ? "BAU" : s.explanation || (inc.state === "INCIDENT_STATE_CLOSED" ? inc.reason : ""),
+      state: inc.state === "INCIDENT_STATE_CLOSED" ? "closed" : inc.state === "INCIDENT_STATE_CALM" ? "needs a reason" : "open", inc, s });
+  }
+  const rows = [...byId.values()].sort((a, b) => b.start - a.start);
+  list.textContent = "";
+  if (!rows.length) { list.append(el("div", "muted", "No anomaly on this metric in the kept days.")); return; }
+  for (const r of rows) {
+    const row = el("div", "anom" + (r.s && r.s.bau ? " bau" : "") + " st-" + r.state.replace(/ /g, "-"));
+    const head = el("div", "anom-head");
+    head.append(el("span", "anom-state", r.state === "open" ? "● open" : r.state === "needs a reason" ? "● needs a reason" : "closed"),
+      el("span", "anom-what", (r.signal || "line") + " " + (r.direction || "") + (r.direction === "silent" ? "" : " · " + change(r))),
+      el("span", "muted", "peak " + withUnit(r.peak, r.unit) + " · normal " + withUnit(r.normal, r.unit)));
+    const when = el("div", "muted anom-when", shortTime(r.start) + " · " + (r.end ? "lasted " + duration(r.end - r.start) : "for " + duration(Date.now() - r.start)));
+    row.append(head, when);
+    if (r.reason) row.append(el("div", "anom-reason", "Reason: " + r.reason + (r.s && r.s.explained_ms ? " · given " + shortTime(r.s.explained_ms) : "")));
+    else if (r.inc && isWaiting(r.inc, r.s)) row.append(reasonBoxes(r.inc, lineId));
+    else row.append(el("div", "anom-reason muted", "Reason: —"));
+    list.append(row);
+  }
+}
+function rerenderMetricAnomalies() {
+  const a = $("incidentsView")._anomalies;
+  if (a && current?.page === "metric" && current.line === a.lineId) drawAnomalies(a.list, a.lineId);
+}
+
+// ---- reasons (per line, or the same for every waiting line of the incident) ------------------------------------------
+const pending = new Map();      // "incident|line" -> {text, bad, deadline}
+const MAX_REASON = 500;
+function reasonBoxes(inc, lineId) {
+  const wrap = el("div", "reasons");
+  const waiting = (inc.series || []).filter((s) => isWaiting(inc, s));
+  const only = waiting.length === 1;
+  wrap.append(reasonBox(inc.incident_id, only ? "" : lineId, only ? "Give reason (closes it)" : "Give reason for this line"));
+  if (waiting.length >= 2) {
+    const others = el("div", "muted others", "This anomaly also waits on: ");
+    waiting.filter((s) => s.series_id !== lineId).forEach((s, i) => {
+      if (i) others.append(", ");
+      const a = el("a", null, tagsText(s.group_tags) || s.metric); a.href = "#/metric/" + s.series_id; others.append(a);
+    });
+    wrap.append(others, reasonBox(inc.incident_id, "", "Same reason for all " + waiting.length + " lines (closes it)"));
+  }
+  return wrap;
+}
+function reasonBox(incidentId, line, label) {
+  const key = incidentId + "|" + line;
+  const box = el("form", "reason-box");
+  const input = el("textarea", "reason-in"); input.maxLength = MAX_REASON; input.rows = 1; input.placeholder = line ? "Why did this line change?" : "Why did this happen?";
+  input.value = drafts.get(key) || "";
+  input.addEventListener("input", () => drafts.set(key, input.value));
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); box.requestSubmit(); } });
+  const send = el("button", "reason-send", label); send.type = "submit";
+  const state = el("span", "reason-state", "");
+  const p = pending.get(key); if (p) { state.textContent = p.text; state.classList.toggle("bad", !!p.bad); }
+  box.append(input, send, state);
+  box.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    const show = (t, bad, deadline) => { pending.set(key, { text: t, bad, deadline }); state.textContent = t; state.classList.toggle("bad", !!bad); };
+    if (!text || text.length > MAX_REASON) return show("a reason of 1 to " + MAX_REASON + " characters is needed", true);
+    show("saving…", false);
+    try {
+      const body = { reason: text }; if (line) body.line = line;
+      const r = await fetch("/incidents/" + encodeURIComponent(incidentId) + "/reason", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.status === 202) { show("saving…", false, Date.now() + 10000); return; }
+      const b = await r.json().catch(() => ({}));
+      show("not saved: " + (b.problem || "HTTP " + r.status), true);
+    } catch (err) { show("not saved: the Notifier cannot be reached", true); }
+  });
+  return box;
+}
+const drafts = new Map();
+function clearAnswered(inc) {
+  if (!inc) return;
+  for (const key of [...pending.keys()]) {
+    const [id, line] = key.split("|");
+    if (id !== inc.incident_id) continue;
+    const s = (inc.series || []).find((x) => x.series_id === line);
+    if (inc.state === "INCIDENT_STATE_CLOSED" || (s && s.explanation) || (!line && !(inc.series || []).some((x) => isWaiting(inc, x)))) { pending.delete(key); drafts.delete(key); }
+  }
+}
+setInterval(() => {
+  for (const [key, p] of pending) if (p.deadline && Date.now() > p.deadline) { p.deadline = 0; p.text = "not saved: no answer from the Detector yet (send again)"; p.bad = true; rerenderMetricAnomalies(); }
+}, 1000);
+
+// ---- start -------------------------------------------------------------------------------------------------------
+(async function start() {
+  await loadCatalogue();
+  route();
+  connect();
+  setInterval(async () => { const before = JSON.stringify(catalogue.sites.map((s) => s.dashboards.map((d) => d.id + d.lineCount))); await loadCatalogue();
+    if (JSON.stringify(catalogue.sites.map((s) => s.dashboards.map((d) => d.id + d.lineCount))) !== before && current?.page === "region") route(); }, 60000);
+})();
+
+// ---- a synthetic region for measuring memory (add-dashboard-view task 3.4): __benchRegion(20, 40, 10) --------------
+window.__benchRegion = async function (dashboards = 20, panels = 40, linesPer = 10) {
+  const site = "bench.example", now = Date.now(), from = now - rangeMs(range);
+  const dash = [];
+  let n = 0;
+  for (let d = 0; d < dashboards; d++) {
+    const groups = [];
+    for (let g = 0; g < 4; g++) {
+      const ps = [];
+      for (let p = 0; p < panels / 4; p++) {
+        const lines = [];
+        for (let l = 0; l < linesPer; l++) {
+          const id = (n++).toString(16).padStart(16, "0");
+          lines.push({ id, metric: "bench.metric", tags: { status: String(200 + l) }, unit: "ms", kind: "latency" });
+          const pts = []; for (let i = 0; i < 300; i++) pts.push([from + i * (now - from) / 300, 100 + 20 * Math.sin(i / 9 + l) + (i === 150 ? 400 : 0)]);
+          series.set(id, pts);
+        }
+        ps.push({ id: "b" + d + "g" + g + "p" + p, title: "Panel " + p, lines });
+      }
+      groups.push({ title: "Group " + g, index: g + 1, panels: ps });
+    }
+    dash.push({ id: "bench-" + d, title: "Bench dashboard " + d, site, groups, panelCount: panels, lineCount: panels * linesPer });
+  }
+  catalogue.sites = catalogue.sites.filter((s) => s.site !== site).concat([{ site, label: "BENCH", dashboards: dash }]);
+  for (const d of dash) { dashById.set(d.id, { dashboard: d, site }); d.groups.forEach((g) => g.panels.forEach((p) => p.lines.forEach((l) => lineInfo.set(l.id, { line: l, places: [{ site, dashboard: d, group: g, panel: p }] })))); }
+  const main = $("incidentsView");
+  leave(); main.textContent = ""; current = { page: "bench" };
+  main.append(el("h1", "page-title", "Bench region"));
+  const t0 = performance.now();
+  for (const d of dash) {
+    const card = el("section", "dash"); card.dataset.dash = d.id;
+    const body = el("div", "dash-body"); card.append(el("div", "dash-head", d.title), body); main.append(card);
+    for (const g of d.groups) { const grid = el("div", "panels"); body.append(grid); for (const p of g.panels) grid.append(panelCard(p)); }
+  }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const firstMs = performance.now() - t0;
+  let maxCharts = 0;
+  for (let y = 0; y < document.body.scrollHeight; y += innerHeight) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 60)); maxCharts = Math.max(maxCharts, charts.size); }
+  scrollTo(0, 0);
+  await new Promise((r) => setTimeout(r, 300));
   const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
-  return { incidents: incidents.size, firstPaintMs: Math.round(firstPaint), burstOf: burst, burstMs: +burstMs.toFixed(1),
-    filterMs: +filterMs.toFixed(1), filterShown: shown, jsHeapMB: mem, domNodes: document.getElementsByTagName("*").length };
+  return { dashboards, panels: dashboards * panels, lines: n, firstPaintMs: Math.round(firstMs), chartsAliveMax: maxCharts, chartsAliveNow: charts.size, jsHeapMB: mem };
 };

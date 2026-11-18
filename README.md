@@ -19,7 +19,7 @@ Datadog dashboards ──► Collector ──► Kafka ──► Store (Timescal
 | Collector | Reads each dashboard's panels from Datadog, then polls their values at 10-second steps | 8101 |
 | Store | Keeps every value once (TimescaleDB), per-minute summaries, answers history questions (gRPC 9102) | 8102 |
 | Detector | Learns each line's normal (sliding median), spots spikes, drops and silence, groups them into incidents | 8103 |
-| Notifier | Live page of the day's incidents, updated over RSocket (WebSocket 7104) | **8104** |
+| Notifier | Live dashboards per region with anomalies (RSocket on 7104, values over SSE), Settings | **8104** |
 | Reporter | One Markdown report per window (a day by default), then cleans the reported raw values | 8105 |
 
 Java 25, Spring Boot 4, Kafka 4 (KRaft), TimescaleDB on Postgres 17, gRPC, RSocket, Protobuf. Every setting lives
@@ -83,7 +83,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | Live incidents of the day: open ones first; each affected line as a path **view → panel group → panel → line → value** (normal and the change, e.g. −94%), shown in full; **▸ history** on a line shows the last time before and every incident of that line in the last 2 days, with their reasons; each line of an incident takes **its own reason** (**Give reason**, kept with the incident), or one **Same reason for all** for every waiting line; an incident whose lines are normal again waits under **Needs a reason** until every line has one. Business-as-usual (BAU) lines — unrecognised (`general`) metrics in any direction, and errors going down — need no reason: they are dimmed and marked BAU, and an incident of only BAU lines closes by itself when calm (no notification). The BAU list is `bau` in `detector.yml`; counts per group, a filter (`/`). 🔔 and 🔊 switch on a desktop notification and a sound for new incidents. The **Settings** tab manages regions, keys and dashboards (see *Change settings*) |
+| http://localhost:8104 | **Live dashboards**, one page per region (US, EU): each watched dashboard collapsed or expanded (remembered), its panels in Datadog's group order as **live line charts** (15m and 1h move every 10 seconds; 4h, 1d, 7d per minute), anomaly times shaded, a red edge on a panel with an open anomaly, badges "● 2 open · ● 1 needs a reason" on each dashboard. Click a panel for its own page (all lines, a sortable legend with newest values); click a line for its **metric page**: graph and details on top, its anomalies of the kept days below, each with **its own reason** (or **Same reason for all** lines of that anomaly). Business-as-usual (BAU) lines — unrecognised (`general`) metrics in any direction, errors going down — need no reason and close by themselves when calm. The header's counter "● 3 open · 2 need a reason" lists those metrics. 🔔 and 🔊 switch on a desktop notification and a sound for new anomalies. **Settings** manages regions, keys and dashboards (see *Change settings*). Charts exist only for panels near the screen and live values are sent only for those, so 20+ dashboards per region stay light |
 | `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
@@ -275,3 +275,5 @@ for each, including what was found and fixed.
 ## Licence
 
 MIT, see `LICENSE`.
+
+The page bundles Apache ECharts 5.5.1 (Apache License 2.0, `app/notifier/src/main/resources/static/vendor/ECHARTS-LICENSE.txt`).

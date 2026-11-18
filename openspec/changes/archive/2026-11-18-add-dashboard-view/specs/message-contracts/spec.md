@@ -24,3 +24,11 @@ resolution, answered as a stream in which each chunk names its line.
 #### Scenario: Asking for a whole dashboard
 - **WHEN** a client asks for 200 lines over the last 3 hours at raw resolution
 - **THEN** it sends one question and receives chunks, each naming the line its points belong to
+
+### Requirement: Every known line in one question
+The Store's question set SHALL include one question that answers the description of every metric line it knows, as
+a stream.
+
+#### Scenario: Building the page's catalogue
+- **WHEN** the Notifier starts
+- **THEN** one question gives it every line's description, with its views and their order

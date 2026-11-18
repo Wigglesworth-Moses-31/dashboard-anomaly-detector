@@ -14,3 +14,11 @@ SHALL get no chunk; a question for more than 1000 lines SHALL be refused.
 #### Scenario: Too many lines
 - **WHEN** a client asks for 1500 lines
 - **THEN** the question is refused with a message saying the limit is 1000
+
+### Requirement: Every known line on request
+The Store SHALL answer the list of every metric line it keeps, each with its full description, newest description
+per line.
+
+#### Scenario: Catalogue
+- **WHEN** a client asks for every line while 452 lines are kept
+- **THEN** it receives 452 descriptions

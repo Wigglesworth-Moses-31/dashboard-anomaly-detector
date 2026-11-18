@@ -127,6 +127,55 @@ class StoreGrpcService extends StoreServiceGrpc.StoreServiceImplBase {
         }
     }
 
+    /** add-dashboard-view D1: every line's description. */
+    @Override
+    public void listSeries(lab.anomaly.contracts.v1.ListSeriesRequest request,
+                           StreamObserver<lab.anomaly.contracts.v1.SeriesDescriptor> out) {
+        try {
+            history.descriptors(bytes -> {
+                try {
+                    out.onNext(lab.anomaly.contracts.v1.SeriesDescriptor.parseFrom(bytes));
+                } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+                    // a description that cannot be read is skipped; the next one is sent
+                }
+            });
+            out.onCompleted();
+        } catch (RuntimeException e) {
+            out.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
+    /** add-dashboard-view D1: many lines, one range; at most 1000 lines. */
+    @Override
+    public void getHistoryBatch(lab.anomaly.contracts.v1.HistoryBatchRequest request, StreamObserver<HistoryChunk> chunks) {
+        String problem = rangeProblem(request.getFromMs(), request.getToMs());
+        if (problem == null && request.getSeriesIdsCount() > 1000) {
+            problem = "at most 1000 lines per question (asked for " + request.getSeriesIdsCount() + ")";
+        }
+        if (problem == null && request.getSeriesIdsList().stream().anyMatch(id -> !SeriesIds.isId(id))) {
+            problem = "every series_id must be 16 hex characters";
+        }
+        if (problem == null && request.getResolution() == Resolution.RESOLUTION_UNSPECIFIED) {
+            problem = "resolution must be RAW or MINUTE";
+        }
+        if (problem != null) {
+            chunks.onError(Status.INVALID_ARGUMENT.withDescription(problem).asRuntimeException());
+            return;
+        }
+        if (request.getSeriesIdsCount() == 0) {
+            chunks.onCompleted();
+            return;
+        }
+        try {
+            history.batch(request.getSeriesIdsList(), request.getFromMs(), request.getToMs(),
+                    request.getResolution() == Resolution.RESOLUTION_RAW,
+                    (id, points) -> chunks.onNext(HistoryChunk.newBuilder().setSeriesId(id).addAllPoints(points).build()));
+            chunks.onCompleted();
+        } catch (RuntimeException e) {
+            chunks.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
     private String rangeProblem(long fromMs, long toMs) {
         if (toMs <= fromMs) {
             return "to must be after from";

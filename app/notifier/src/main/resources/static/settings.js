@@ -16,8 +16,8 @@ function showTab() {
   const settings = location.hash === "#settings";
   $("incidentsView").hidden = settings;
   $("settingsView").hidden = !settings;
-  $("tabIncidents").classList.toggle("active", !settings);
   $("tabSettings").classList.toggle("active", settings);
+  window.dispatchEvent(new CustomEvent("viewchange"));
   if (settings) load();
 }
 window.addEventListener("hashchange", showTab);
