@@ -38,6 +38,15 @@ public final class PollProcessor {
         return lines.size();
     }
 
+    /** As {@link #process}, for a backfilled window: the points go out marked as backfill (add-backfill B3). */
+    public int backfill(PollUnit unit, TimeseriesAnswer answer, Duration step) {
+        List<TranslatedLine> lines = translator.translate(unit, answer, step);
+        for (TranslatedLine line : lines) {
+            emitter.emitBackfill(classifier.classify(line, rules.get()), line.points(), line.collectedMs());
+        }
+        return lines.size();
+    }
+
     public Emitter emitter() {
         return emitter;
     }

@@ -24,7 +24,9 @@ import lab.anomaly.contracts.v1.Incident;
  */
 public final class LineHistory {
 
-    public static final long WINDOW_MS = 2 * 24 * 3_600_000L;
+    public static final long WINDOW_MS = 10 * 24 * 3_600_000L;        // keep-ten-days T4
+    /** At most this many incidents per line are remembered, the oldest dropped first: memory stays bounded. */
+    public static final int MAX_PER_LINE = 200;
 
     /** One incident of one line, as the page shows it. {@code reason} is the human reason, "" until one is given. */
     public record Occurrence(String incidentId, String title, long startedMs, long endedMs, String signal, String direction,
@@ -37,7 +39,11 @@ public final class LineHistory {
 
     public synchronized void accept(Incident incident) {
         for (AffectedSeries s : incident.getSeriesList()) {
-            byLine.computeIfAbsent(s.getSeriesId(), k -> new LinkedHashMap<>())
+            LinkedHashMap<String, Occurrence> perLine = byLine.computeIfAbsent(s.getSeriesId(), k -> new LinkedHashMap<>());
+            if (perLine.size() >= MAX_PER_LINE && !perLine.containsKey(incident.getIncidentId())) {
+                perLine.remove(perLine.keySet().iterator().next());         // oldest first
+            }
+            perLine
                     .put(incident.getIncidentId(), new Occurrence(incident.getIncidentId(), incident.getTitle(),
                             incident.getStartedMs(), incident.getEndedMs(), s.getSignal(), s.getReason(), s.getPeakValue(),
                             s.getNormalValue(), s.getUnit(), reasonOf(incident, s)));

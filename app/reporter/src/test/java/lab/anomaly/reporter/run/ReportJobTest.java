@@ -39,11 +39,11 @@ class ReportJobTest {
     }
 
     @Test
-    void oneRunGoesAllTheWayAndAsksTheStoreForTheWindowEndMinusOneHour() throws Exception {
+    void oneRunGoesAllTheWayAndRemovesNothing() throws Exception {                 // keep-ten-days T2
         assertThat(run()).isEqualTo(ReportState.Step.CLEANED);
-        assertThat(sources.removeCalls).containsExactly(at("2026-11-16T23:00:00"));
+        assertThat(sources.removeCalls).isEmpty();
         assertThat(Files.readString(dir.resolve("2026-11-16.md"))).contains("**1 incident**");
-        assertThat(new ReportState(dir).get("2026-11-16").removedPoints()).isEqualTo(1000);
+        assertThat(new ReportState(dir).get("2026-11-16").removedPoints()).isZero();
     }
 
     @Test
@@ -52,22 +52,19 @@ class ReportJobTest {
         long written = Files.getLastModifiedTime(dir.resolve("2026-11-16.md")).toMillis();
         sources.events.clear();                                       // even if the data changed
         assertThat(run()).isEqualTo(ReportState.Step.CLEANED);
-        assertThat(sources.removeCalls).hasSize(1);
+        assertThat(sources.removeCalls).isEmpty();
         assertThat(Files.getLastModifiedTime(dir.resolve("2026-11-16.md")).toMillis()).isEqualTo(written);
     }
 
     @Test
     void aRestartAfterWritingFinishesWithoutASecondReport() throws Exception {
-        sources.failRemove = new RuntimeException("Store down");      // crash between verified and cleaned
-        assertThatThrownBy(this::run).hasMessage("Store down");
-        assertThat(new ReportState(dir).step("2026-11-16")).isEqualTo(ReportState.Step.VERIFIED);
+        run();
         String first = Files.readString(dir.resolve("2026-11-16.md"));
-
-        sources.failRemove = null;
+        new ReportState(dir).put("2026-11-16", new ReportState.Entry(ReportState.Step.VERIFIED, 1, 0, 0, NOW));   // crash after verifying
         sources.events.clear();                                       // a second write would now say "No incidents"
         assertThat(run()).isEqualTo(ReportState.Step.CLEANED);
         assertThat(Files.readString(dir.resolve("2026-11-16.md"))).isEqualTo(first);
-        assertThat(sources.removeCalls).hasSize(1);
+        assertThat(sources.removeCalls).isEmpty();
     }
 
     @Test

@@ -39,6 +39,7 @@ public final class KafkaPublisher implements MessageSink, AutoCloseable {
     public KafkaPublisher(String bootstrapServers, String seriesTopic, String pointsTopic) {
         Properties config = new Properties();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "zstd");             // keep-ten-days T3: smaller on disk
         config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);     // producer retries cannot create duplicates
         config.put(ProducerConfig.ACKS_CONFIG, "all");                  // sent = safely stored
         config.put(ProducerConfig.LINGER_MS_CONFIG, 5);                 // small batches

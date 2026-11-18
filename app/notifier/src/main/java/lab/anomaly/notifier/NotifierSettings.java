@@ -23,7 +23,7 @@ public record NotifierSettings(int rsocketPort, String dayBy, int maxQueuedUpdat
     public record Dashboards(List<String> ranges, Integer pointsPerLine, Integer linesPerPanel, String storeAddress,
                              java.time.Duration catalogueRefresh) {
         public Dashboards {
-            ranges = ranges == null || ranges.isEmpty() ? List.of("15m", "1h", "4h", "1d", "7d") : List.copyOf(ranges);
+            ranges = ranges == null || ranges.isEmpty() ? List.of("15m", "1h", "4h", "1d", "7d", "10d") : List.copyOf(ranges);
             pointsPerLine = pointsPerLine == null ? 600 : pointsPerLine;
             linesPerPanel = linesPerPanel == null ? 20 : linesPerPanel;
             storeAddress = storeAddress == null || storeAddress.isBlank() ? "localhost:9102" : storeAddress;
@@ -64,7 +64,7 @@ public record NotifierSettings(int rsocketPort, String dayBy, int maxQueuedUpdat
                 SettingsValidator.require("max-queued-updates-per-viewer", s -> s.maxQueuedUpdatesPerViewer() >= 10,
                         "must be at least 10"),
                 SettingsValidator.require("dashboards.ranges", s -> s.dashboards().ranges().stream().allMatch(NotifierSettings::validRange),
-                        "each range like 15m, 1h, 4h, 1d or 7d, at most 7 days (what is kept)"),
+                        "each range like 15m, 1h, 4h, 1d, 7d or 10d, at most 10 days (what is kept)"),
                 SettingsValidator.require("dashboards.points-per-line", s -> s.dashboards().pointsPerLine() >= 100 && s.dashboards().pointsPerLine() <= 5000,
                         "must be between 100 and 5000"),
                 SettingsValidator.require("dashboards.lines-per-panel", s -> s.dashboards().linesPerPanel() >= 1 && s.dashboards().linesPerPanel() <= 500,
@@ -74,7 +74,7 @@ public record NotifierSettings(int rsocketPort, String dayBy, int maxQueuedUpdat
     static boolean validRange(String r) {
         try {
             java.time.Duration d = Dashboards.parse(r);
-            return !d.isNegative() && !d.isZero() && d.compareTo(java.time.Duration.ofDays(7)) <= 0;
+            return !d.isNegative() && !d.isZero() && d.compareTo(java.time.Duration.ofDays(10)) <= 0;
         } catch (RuntimeException e) {
             return false;
         }

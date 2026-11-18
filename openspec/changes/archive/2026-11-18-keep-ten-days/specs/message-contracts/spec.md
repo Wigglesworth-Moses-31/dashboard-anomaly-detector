@@ -2,13 +2,13 @@
 
 ## ADDED Requirements
 
-### Requirement: Messages are kept 7 days, compressed
-Every topic SHALL keep its messages 7 days, and every producer SHALL compress its messages (zstd). Existing topics
+### Requirement: Messages are kept 10 days, compressed
+Every topic SHALL keep its messages 10 days, and every producer SHALL compress its messages (zstd). Existing topics
 SHALL be changed in place when the system starts, without losing messages.
 
 #### Scenario: Topic settings
 - **WHEN** the topics are described after start
-- **THEN** each shows a retention of 7 days
+- **THEN** each shows a retention of 10 days
 
 #### Scenario: Smaller on disk
 - **WHEN** the same recording is replayed with and without compression

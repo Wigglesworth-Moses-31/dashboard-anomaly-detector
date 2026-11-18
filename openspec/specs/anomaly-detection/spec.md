@@ -245,15 +245,19 @@ SHALL be loaded from the database and continue.
 - **THEN** the same incident continues and later closes, without a second one being opened
 
 ### Requirement: Storage stays small
-Closed incidents SHALL be removed after a set time (default 2 days, at most 7), with their reasons. Open and calm
+Closed incidents SHALL be removed after a set time (default 10 days, at most 10), with their reasons. Open and calm
 incidents SHALL never be removed. Each line's history SHALL use a fixed amount of memory.
 
 #### Scenario: Old incidents
-- **WHEN** an incident closed 3 days ago
+- **WHEN** an incident closed 11 days ago
 - **THEN** it is no longer stored
 
+#### Scenario: Six days old
+- **WHEN** an incident closed 9 days ago
+- **THEN** it is still stored, with its reasons
+
 #### Scenario: Waiting for a reason
-- **WHEN** an incident has been calm for 3 days without a reason
+- **WHEN** an incident has been calm for 11 days without a reason
 - **THEN** it is still stored
 
 ### Requirement: Finds the recorded problems
@@ -370,11 +374,11 @@ new incident.
 - **THEN** the incident's reason is "gateway restart"
 
 ### Requirement: Waiting incidents stay visible
-Open and calm incidents SHALL be announced again at least every 12 hours, so readers that rebuild from the last 2 days
+Open and calm incidents SHALL be announced again at least every 12 hours, so readers that rebuild from the last 10 days
 of events still know them.
 
 #### Scenario: Calm for three days
-- **GIVEN** an incident calm for 3 days without a reason
+- **GIVEN** an incident calm for 3 days without a reason (and the same after 11 days)
 - **WHEN** the Notifier is restarted
 - **THEN** the incident is on the page under "Needs a reason"
 
@@ -400,3 +404,22 @@ itself when calm, with the reason "BAU". The list SHALL change without a restart
 #### Scenario: Setting changed
 - **WHEN** "general" is removed from the BAU list and committed
 - **THEN** new "general" lines need a reason, without a restart
+
+### Requirement: Backfilled values are judged as the past
+The Detector SHALL judge backfilled values in time order like live ones, so a line's normal is built from them and
+live judging starts at once. An incident opened by backfilled values SHALL be marked found in backfill and, when its
+lines are normal again, SHALL close by itself with the reason "found in backfill": no reason asked, no notification.
+An incident found in backfill still going on when live values arrive SHALL continue as a live incident and be
+announced as opened.
+
+#### Scenario: A spike 30 hours ago
+- **WHEN** a new dashboard's backfill holds a latency spike 30 hours ago that lasted 6 minutes
+- **THEN** an incident with that start and end is stored, closed, marked found in backfill, with the reason "found in backfill"
+
+#### Scenario: Still going on
+- **WHEN** the backfill ends inside an anomaly and the next live values are still abnormal
+- **THEN** the incident is announced as opened, no longer marked found in backfill
+
+#### Scenario: Warm at once
+- **WHEN** the backfill of a new line has been judged
+- **THEN** its next live value is judged without waiting 10 minutes

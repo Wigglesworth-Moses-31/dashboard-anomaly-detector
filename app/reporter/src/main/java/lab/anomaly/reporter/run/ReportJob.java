@@ -8,7 +8,6 @@ import java.util.Comparator;
 import java.util.List;
 import lab.anomaly.contracts.v1.Incident;
 import lab.anomaly.contracts.v1.IncidentEvent;
-import lab.anomaly.contracts.v1.RemoveRawReply;
 import lab.anomaly.contracts.v1.SeriesDescriptor;
 import lab.anomaly.reporter.report.Completion;
 import lab.anomaly.reporter.report.IncidentReport;
@@ -63,13 +62,11 @@ public final class ReportJob {
             step = ReportState.Step.VERIFIED;
         }
         if (step == ReportState.Step.VERIFIED) {
-            long before = Math.min(w.endMs() - keepBeforeEndMs, nowMs);          // never data still arriving
-            RemoveRawReply reply = sources.removeRawBefore(before);
+            // keep-ten-days T2: a report removes nothing; the Store removes values by age (10 days). The step is kept so
+            // the state file reads the same as before ("cleaned" = done).
             ReportState.Entry e = state.get(w.key());
-            state.put(w.key(), new ReportState.Entry(ReportState.Step.CLEANED, e.incidents(), reply.getRemovedPoints(),
-                    reply.getEffectiveBeforeMs(), nowMs));
-            log.info("Window {} cleaned: {} raw points removed (asked {}, Store used {})", w.key(), reply.getRemovedPoints(),
-                    java.time.Instant.ofEpochMilli(before), java.time.Instant.ofEpochMilli(reply.getEffectiveBeforeMs()));
+            state.put(w.key(), new ReportState.Entry(ReportState.Step.CLEANED, e.incidents(), 0, 0, nowMs));
+            log.info("Window {} done: report verified; values are kept and removed by age", w.key());
             step = ReportState.Step.CLEANED;
         }
         return step;

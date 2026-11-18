@@ -8,6 +8,10 @@ anomaly:
     # The Datadog regions to watch (at most two: us, eu) and their dashboards are in regions.yml, written by the
     # Settings tab of the live page (or by hand). Every other Collector setting is here.
     poll-interval: 15s                        # how often to ask for new data
+    backfill-new-views: 2d                    # add-backfill: a dashboard view never collected before gets its last 2 days first
+                                              #   (at first-time setup and when added in the Settings tab; 0s = off, at most 10d)
+    backfill-window: 4h                       # one Datadog call per window of this length, oldest first
+    store-address: localhost:9102             # the Store: which views are already collected
     step: 10s                                 # size of each data step (highest value per step)
     backfill: 10m                             # how much history to fetch at start
     recent-window: 2m                         # how much to fetch on each later poll

@@ -258,7 +258,7 @@ public class DetectorEngine {
                 warm(m.getSeriesId(), pts.get(0).getTsMs());
             }
             for (Point p : pts) {
-                changes.addAll(detector.accept(m.getSeriesId(), p.getTsMs(), p.getValue(), p.getPartial(), readMs));
+                changes.addAll(detector.accept(m.getSeriesId(), p.getTsMs(), p.getValue(), p.getPartial(), readMs, m.getBackfill()));
                 stats.valuesJudged.incrementAndGet();
             }
         }

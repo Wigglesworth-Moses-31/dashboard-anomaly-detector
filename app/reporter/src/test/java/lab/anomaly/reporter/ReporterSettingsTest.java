@@ -29,6 +29,7 @@ class ReporterSettingsTest {
 
     @Test
     void aCatchUpBeyondTwoDaysIsRejected() {
-        assertThat(problems(with(Duration.ofHours(24), Duration.ofDays(3)))).containsExactly("catch-up: at most 2 days: older data is no longer kept");
+        assertThat(problems(with(Duration.ofHours(24), Duration.ofDays(10)))).isEmpty();
+        assertThat(problems(with(Duration.ofHours(24), Duration.ofDays(11)))).containsExactly("catch-up: at most 10 days: older data is no longer kept");
     }
 }

@@ -51,14 +51,25 @@ class LineHistoryTest {
     }
 
     @Test
-    void olderThanTwoDaysIsDroppedButOpenOnesStay() {
+    void olderThanTenDaysIsDroppedButOpenOnesStay() {                       // keep-ten-days T4
         LineHistory h = new LineHistory();
-        h.accept(incident("old", "2026-11-14T10:00:00Z", "2026-11-14T10:05:00Z", 1, 10));
-        h.accept(incident("open", "2026-11-14T11:00:00Z", null, 1, 10));
+        h.accept(incident("old", "2026-11-06T10:00:00Z", "2026-11-06T10:05:00Z", 1, 10));
+        h.accept(incident("open", "2026-11-06T11:00:00Z", null, 1, 10));
         assertThat(h.past(LINE, null, NOW).all()).extracting(LineHistory.Occurrence::incidentId).containsExactly("open");
         assertThat(h.sweep(NOW)).isEqualTo(1);
         assertThat(h.past("unknown", null, NOW).all()).isEmpty();
         assertThat(h.past("unknown", null, NOW).last()).isNull();
+    }
+
+    @Test
+    void aLineKeepsAtMostTwoHundredIncidentsOldestDroppedFirst() {          // keep-ten-days T4: bounded memory
+        LineHistory h = new LineHistory();
+        for (int i = 0; i < 250; i++) {
+            h.accept(incident("i" + i, java.time.Instant.parse("2026-11-17T00:00:00Z").plusSeconds(i * 60L).toString(),
+                    java.time.Instant.parse("2026-11-17T00:00:30Z").plusSeconds(i * 60L).toString(), 1, 10));
+        }
+        assertThat(h.past(LINE, null, NOW).all()).hasSize(LineHistory.MAX_PER_LINE)
+                .extracting(LineHistory.Occurrence::incidentId).doesNotContain("i0", "i49").contains("i50", "i249");
     }
 
     @Test

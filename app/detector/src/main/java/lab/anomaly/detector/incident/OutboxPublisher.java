@@ -65,6 +65,7 @@ public class OutboxPublisher {
     private void loop() {
         Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        p.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "zstd");             // keep-ten-days T3: smaller on disk
         p.put(ProducerConfig.ACKS_CONFIG, "all");
         p.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         p.put(ProducerConfig.CLIENT_ID_CONFIG, "detector-outbox");

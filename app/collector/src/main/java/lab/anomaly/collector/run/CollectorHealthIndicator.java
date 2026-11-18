@@ -46,6 +46,7 @@ public class CollectorHealthIndicator implements HealthIndicator {
             sources.put(lane.name(), source(lane, now, warnings));
         }
         details.put("sources", sources);
+        details.put("backfill", engine.backfills());                  // add-backfill: views being filled with their last days
         details.put("warnings", warnings);
         return (warnings.isEmpty() ? Health.up() : Health.status(SettingsHealthIndicator.DEGRADED)).withDetails(details).build();
     }

@@ -38,7 +38,11 @@ public class StoreHealthIndicator implements HealthIndicator {
         d.put("databaseMB", housekeeping.totalBytes() / 1_048_576.0);
         Map<String, String> tables = new LinkedHashMap<>();
         housekeeping.tableBytes().forEach((t, b) -> tables.put(t, String.format("%.1f MB", b / 1_048_576.0)));
+        java.util.Map<String, String> compressed = new java.util.LinkedHashMap<>();       // keep-ten-days T1
+        housekeeping.compression().forEach((t, b) -> compressed.put(t, b[0] == 0 ? "nothing compressed yet"
+                : String.format("%.1f MB → %.1f MB (%.1f×)", b[0] / 1_048_576.0, b[1] / 1_048_576.0, b[0] / (double) Math.max(1, b[1]))));
         d.put("tables", tables);
+        d.put("compressed", compressed);
 
         StringBuilder why = new StringBuilder();
         if (housekeeping.overLimit()) {

@@ -79,7 +79,7 @@ class ContractCompatibilityTest {
     @Test
     void addingAFieldIsAllowed() {
         FileDescriptorSet edited = editMetricPoints(m -> m.toBuilder().addField(FieldDescriptorProto.newBuilder()
-                .setName("collector_version").setNumber(4)
+                .setName("collector_version").setNumber(5)
                 .setType(FieldDescriptorProto.Type.TYPE_STRING).setLabel(FieldDescriptorProto.Label.LABEL_OPTIONAL)).build());
 
         assertThat(ContractCompatibility.problems(ContractCompatibility.current(), edited)).isEmpty();

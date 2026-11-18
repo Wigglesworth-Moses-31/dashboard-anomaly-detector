@@ -111,6 +111,13 @@ public class StoreConsumer {
                     stats.setAside.addAndGet(batch.setAside().size());
                     stats.batches.incrementAndGet();
                     stats.pointsReceived.addAndGet(batch.points().size());
+                    // values older than the per-minute refresh window (3 h): backfill or late data (keep-ten-days T1)
+                    long late = System.currentTimeMillis() - 3 * 3_600_000L;
+                    for (var row : batch.points().values()) {
+                        if (row.tsMs() < late) {
+                            stats.noteLate(row.tsMs());
+                        }
+                    }
                     stats.descriptionsSaved.addAndGet(saved[0]);
                     stats.pointsSaved.addAndGet(saved[1]);
                     stats.lastSaveMs = System.currentTimeMillis();

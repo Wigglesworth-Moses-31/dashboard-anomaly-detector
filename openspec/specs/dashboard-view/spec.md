@@ -45,11 +45,11 @@ polling.
 - **THEN** it shows the 20 highest with "+ 280 more", and its Panel page shows all
 
 ### Requirement: A time range can be chosen
-The region, panel and metric pages SHALL offer 15m and 1h (10-second values, moving live) and 4h, 1d and 7d
+The region, panel and metric pages SHALL offer 15m and 1h (10-second values, moving live) and 4h, 1d, 7d and 10d
 (per-minute values, labelled "per minute"). A range longer than the data kept SHALL show what is kept and say so.
 
 #### Scenario: Long range
-- **WHEN** 7d is chosen while 2 days are kept
+- **WHEN** 10d is chosen while 2 days are kept
 - **THEN** the charts show 2 days of per-minute values and say "2 days kept"
 
 ### Requirement: Anomalies are shown on the charts
@@ -163,7 +163,7 @@ Datadog's own graphs.
 
 ### Requirement: Dashboard view settings live outside the code
 The ranges offered, the default range, the most points per line and the most lines per panel SHALL be settings in
-`notifier.yml`, changed without a restart; a range longer than 7 days SHALL be refused.
+`notifier.yml`, changed without a restart; a range longer than 10 days SHALL be refused.
 
 #### Scenario: Range beyond what is kept
 - **WHEN** a 30-day range is added to the settings
@@ -176,3 +176,11 @@ and their slowest answer.
 #### Scenario: After opening a dashboard
 - **WHEN** a dashboard has been expanded on one page
 - **THEN** health shows one page, its panels on screen and one Store call with its time
+
+### Requirement: Past anomalies are shown as such
+An anomaly found in backfill SHALL be listed on its metric page as "past · found in backfill" with its times, shaded
+grey on charts, never counted as open or waiting, and SHALL NOT notify.
+
+#### Scenario: Metric page
+- **WHEN** a line's page is opened after its backfill found a spike
+- **THEN** the spike is listed as "past · found in backfill", closed, with no reason box

@@ -4,6 +4,7 @@ import jakarta.annotation.PreDestroy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -124,6 +125,9 @@ public class CollectorEngine {
                         config.apiKeyEnv(), config.appKeyEnv(), config.name()),
                 (config, credentials, clock) -> new DatadogSource(config.site(), credentials, clock),
                 environment, Clock.systemUTC(), (lane, s) -> files.views(s, lane.name()));
+        lab.anomaly.collector.backfill.StoreViews store = new lab.anomaly.collector.backfill.StoreViews(
+                () -> environment.getProperty("anomaly.collector.store-address", "localhost:9102"));
+        this.collected = store::views;                                  // add-backfill B2
     }
 
     /** For tests: stub sources, keys and clock; dashboards read by id from the stub source. */
@@ -206,6 +210,13 @@ public class CollectorEngine {
                 PlanReady ready;
                 while ((ready = plansReady.poll()) != null) {
                     apply(ready, now);
+                }
+                for (Lane lane : lanes.values()) {                         // add-backfill: decisions waiting for the Store
+                    Long at = backfillRecheckMs.get(lane.name());
+                    if (at != null && now >= at && !backfillRunning.contains(lane.name())) {
+                        backfillRecheckMs.remove(lane.name());
+                        planBackfill(lane, now);
+                    }
                 }
                 if (now >= nextGuardMs) {
                     lanes.values().forEach(l -> guard(l, settings.get()));     // budget guard (J13), every 5 s
@@ -366,6 +377,8 @@ public class CollectorEngine {
         }
         lane.unitIds.retainAll(fresh);
         lane.unitIds.addAll(fresh);
+        held.retainAll(units.keySet());
+        planBackfill(lane, now);                                           // add-backfill: hold units of new views
         syncScheduler(now);
         CollectorSettings s = settings.get();
         lane.effectiveIntervalMs = 0;                        // recompute for the new units
@@ -387,13 +400,200 @@ public class CollectorEngine {
     public static final double BUDGET_WARNING = 0.9;
 
     /** Kept units keep their due times (Scheduler.setUnits), so one lane's change never resets another's timing. */
+    // ---- add-backfill: a never-collected view gets its last days first (design B2, B3) -----------------------------
+
+    /** Which views the Store already has lines for; null = backfill off (tests, replay). */
+    private volatile lab.anomaly.collector.backfill.StoreViews.Collected collected;
+    private volatile Duration backfillSpan;                    // tests; else the setting backfill-new-views (default 2d)
+    private volatile Duration backfillWindow;                  // tests; else the setting backfill-window (default 4h)
+    private volatile long backfillPauseMs = 500;
+    /** Units waiting for their view's backfill: not scheduled for live polling until it is done. */
+    private final Set<String> held = ConcurrentHashMap.newKeySet();
+    /** Views backfilled (or found collected) in this run: "site|view id". */
+    private final Set<String> backfilled = ConcurrentHashMap.newKeySet();
+    /** Progress per view being backfilled: "site|view id" → {windows done, windows, view title}. */
+    private final Map<String, Object[]> backfillProgress = new ConcurrentHashMap<>();
+    private final Map<String, Long> backfillRecheckMs = new ConcurrentHashMap<>();   // lane → when to ask the Store again
+    private final Map<String, Long> storeWaitSinceMs = new ConcurrentHashMap<>();
+    private final Set<String> backfillRunning = ConcurrentHashMap.newKeySet();       // lanes with a job running
+
+    public void setCollectedViews(lab.anomaly.collector.backfill.StoreViews.Collected collected, Duration span, Duration window, long pauseMs) {
+        this.collected = collected;
+        this.backfillSpan = span;
+        this.backfillWindow = window;
+        this.backfillPauseMs = pauseMs;
+    }
+
+    Duration backfillSpan() {
+        if (backfillSpan != null) {
+            return backfillSpan;
+        }
+        Duration d = environment == null ? Duration.ofDays(2)
+                : environment.getProperty("anomaly.collector.backfill-new-views", Duration.class, Duration.ofDays(2));
+        return d.compareTo(Duration.ofDays(10)) > 0 ? Duration.ofDays(10) : d;      // never more than is kept
+    }
+
+    Duration backfillWindow() {
+        if (backfillWindow != null) {
+            return backfillWindow;
+        }
+        Duration d = environment == null ? Duration.ofHours(4)
+                : environment.getProperty("anomaly.collector.backfill-window", Duration.class, Duration.ofHours(4));
+        return d.isNegative() || d.isZero() ? Duration.ofHours(4) : d;
+    }
+
+    /** View id → the views of a unit, keyed "site|view id". */
+    private static Set<String> viewKeys(Lane lane, PollUnit unit) {
+        Set<String> out = new HashSet<>();
+        unit.views().forEach(v -> out.add(lab.anomaly.collector.backfill.StoreViews.key(lane.config().site(), v.dashboardId())));
+        return out;
+    }
+
+    /**
+     * Decides which of a lane's units belong only to never-collected views, holds them and starts the lane's backfill.
+     * When the Store cannot be asked yet, every unit not yet polled is held and the decision is retried in 10 s (at
+     * most 2 minutes, then live polling starts without a backfill). O(units).
+     */
+    private void planBackfill(Lane lane, long now) {
+        if (collected == null || backfillSpan().isZero() || lanes.get(lane.name()) != lane) {
+            return;
+        }
+        java.util.Optional<Set<String>> have = collected.views();
+        if (have.isEmpty()) {
+            long since = storeWaitSinceMs.computeIfAbsent(lane.name(), k -> now);
+            if (now - since < 120_000) {
+                for (String id : lane.unitIds) {
+                    if (!polledOnce.contains(id)) {
+                        held.add(id);
+                    }
+                }
+                backfillRecheckMs.put(lane.name(), now + 10_000);
+                syncScheduler(now);
+                return;
+            }
+            log.warn("[{}] The Store cannot be asked which dashboards are new: live polling starts without a backfill", lane.name());
+            storeWaitSinceMs.remove(lane.name());
+            backfillRecheckMs.remove(lane.name());
+            lane.unitIds.forEach(held::remove);
+            syncScheduler(now);
+            return;
+        }
+        storeWaitSinceMs.remove(lane.name());
+        backfillRecheckMs.remove(lane.name());
+        List<PollUnit> toFill = new ArrayList<>();
+        Map<String, String> newViews = new LinkedHashMap<>();
+        for (String id : lane.unitIds) {
+            PollUnit unit = units.get(id);
+            if (unit == null || polledOnce.contains(id)) {
+                held.remove(id);
+                continue;
+            }
+            Set<String> keys = viewKeys(lane, unit);
+            boolean allNew = keys.stream().allMatch(k -> !have.get().contains(k) && !backfilled.contains(k));
+            if (allNew) {
+                held.add(id);
+                toFill.add(unit);
+                unit.views().forEach(v -> newViews.putIfAbsent(lab.anomaly.collector.backfill.StoreViews.key(lane.config().site(), v.dashboardId()),
+                        v.dashboardTitle()));
+            } else {
+                held.remove(id);
+            }
+        }
+        syncScheduler(now);
+        if (toFill.isEmpty() || !backfillRunning.add(lane.name())) {
+            return;                                     // nothing new, or this lane's job is running (it re-plans at its end)
+        }
+        long windows = Math.max(1, (backfillSpan().toMillis() + backfillWindow().toMillis() - 1) / backfillWindow().toMillis());
+        newViews.forEach((k, title) -> backfillProgress.put(k, new Object[] {0L, windows, title}));
+        log.info("[{}] Backfill: {} new views ({}), {} questions, last {} in {} windows", lane.name(), newViews.size(),
+                String.join(", ", newViews.values()), toFill.size(), backfillSpan(), windows);
+        List<PollUnit> fill = List.copyOf(toFill);
+        Set<String> views = Set.copyOf(newViews.keySet());
+        workers.submit(() -> runBackfill(lane, fill, views));
+    }
+
+    /** One lane's backfill: windows oldest first, batched like polls, through the lane's fetcher (rate gate, 429 wait). */
+    private void runBackfill(Lane lane, List<PollUnit> fill, Set<String> views) {
+        CollectorSettings s = settings.get();
+        long stepMs = s.step().toMillis();
+        long now = clock.millis();
+        long to = (now / stepMs) * stepMs;
+        long from = ((to - backfillSpan().toMillis()) / stepMs) * stepMs;
+        long window = Math.max(stepMs, (backfillWindow().toMillis() / stepMs) * stepMs);
+        int lines = 0;
+        try {
+            for (long w = from; w < to; w += window) {
+                if (lanes.get(lane.name()) != lane || !running) {
+                    log.info("[{}] Backfill stopped: the source was changed", lane.name());
+                    return;
+                }
+                long wEnd = Math.min(to, w + window);
+                for (Batch b : Batch.pack(fill, s.effectiveBatchFormulas())) {
+                    lines += backfillAsk(lane, b, s, w, wEnd);
+                    Thread.sleep(backfillPauseMs);                         // leaves room for live polls
+                }
+                views.forEach(v -> backfillProgress.computeIfPresent(v, (k, p) -> new Object[] {(Long) p[0] + 1, p[1], p[2]}));
+            }
+            backfilled.addAll(views);
+            log.info("[{}] Backfill done: {} views, {} line-windows sent", lane.name(), views.size(), lines);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            views.forEach(backfillProgress::remove);
+            fill.forEach(u -> held.remove(u.id()));
+            backfillRunning.remove(lane.name());
+            backfillRecheckMs.put(lane.name(), clock.millis());          // anything added meanwhile is planned next
+            syncScheduler(clock.millis());
+        }
+    }
+
+    private int backfillAsk(Lane lane, Batch batch, CollectorSettings s, long from, long to) throws InterruptedException {
+        try {
+            TimeseriesAnswer answer = lane.fetcher().fetch(batch.request(from, to, s.step().toMillis()));
+            List<TimeseriesAnswer> answers = batch.split(answer);
+            int lines = 0;
+            for (int k = 0; k < batch.size(); k++) {
+                try {
+                    lines += lane.processor().backfill(batch.units().get(k), answers.get(k), s.step());
+                } catch (RuntimeException e) {
+                    log.debug("[{}] Backfill of {} skipped a window: {}", lane.name(), batch.units().get(k).label(), e.toString());
+                }
+            }
+            lane.calls.incrementAndGet();
+            return lines;
+        } catch (SourceException e) {
+            lane.calls.incrementAndGet();
+            if (e.kind() == SourceException.Kind.BAD_REQUEST && batch.size() > 1) {
+                int lines = 0;
+                for (Batch half : batch.halves()) {
+                    lines += backfillAsk(lane, half, s, from, to);
+                }
+                return lines;
+            }
+            log.warn("[{}] Backfill window not answered ({}): it stays empty", lane.name(), e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Views being backfilled: title → "n%" (health, Settings tab). */
+    public Map<String, String> backfills() {
+        Map<String, String> out = new LinkedHashMap<>();
+        backfillProgress.forEach((k, p) -> out.put(p[2] + " (" + k.substring(0, k.indexOf('|')) + ")",
+                Math.round(100.0 * (Long) p[0] / Math.max(1L, (Long) p[1])) + "%"));
+        return out;
+    }
+
+    Set<String> held() {
+        return held;
+    }
+
     private void syncScheduler(long now) {
         Scheduler s = scheduler;
         if (s == null) {
             return;
         }
         synchronized (s) {
-            s.setUnits(List.copyOf(units.keySet()), now);
+            s.setUnits(units.keySet().stream().filter(id -> !held.contains(id)).toList(), now);   // held: backfilling first
         }
     }
 

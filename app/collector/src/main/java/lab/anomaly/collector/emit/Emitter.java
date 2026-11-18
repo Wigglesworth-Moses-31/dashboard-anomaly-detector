@@ -111,6 +111,35 @@ public final class Emitter {
     }
 
     /**
+     * Sends a backfilled window of one line (add-backfill B3): the description if new or changed, then the window's
+     * finished points as one batch marked {@code backfill}. The live memory of sent steps is not touched (it is sized
+     * for minutes, not days); a later live poll that repeats a step is harmless.
+     */
+    public void emitBackfill(SeriesDescriptor.Builder description, List<Point> points, long collectedMs) {
+        String id = description.getSeriesId();
+        LineState state = lines.computeIfAbsent(id, k -> new LineState());
+        synchronized (state) {
+            int hash = description.clone().clearFirstSeenMs().clearUpdatedMs().build().hashCode();
+            if (state.firstSeenMs == 0 || state.descriptionHash != hash) {
+                if (state.firstSeenMs == 0) {
+                    state.firstSeenMs = collectedMs;
+                }
+                state.descriptionHash = hash;
+                sink.send(description.setFirstSeenMs(state.firstSeenMs).setUpdatedMs(collectedMs).build());
+            }
+        }
+        MetricPoints.Builder batch = MetricPoints.newBuilder().setSeriesId(id).setCollectedMs(collectedMs).setBackfill(true);
+        for (Point point : points) {
+            if (!point.getPartial()) {
+                batch.addPoints(point);
+            }
+        }
+        if (batch.getPointsCount() > 0) {
+            sink.send(batch.build());
+        }
+    }
+
+    /**
      * Sends from now on to another sink, keeping the memory of what was already sent. Used when settings change
      * (for example recording switched on), so finished steps are not sent twice and recording sees new messages.
      */

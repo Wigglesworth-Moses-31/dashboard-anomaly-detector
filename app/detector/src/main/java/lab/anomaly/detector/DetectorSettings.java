@@ -19,7 +19,7 @@ import lab.anomaly.kit.settings.SettingsValidator;
  * @param silenceSkipSignals signals never judged on silence (an error count that stops reporting is good news)
  * @param groupBy            tags deciding an incident's group, first one a line has; else its dashboard
  * @param upstreamTags       group tags that mean "a service being called"
- * @param incidentRetention  closed incidents kept this long (at most 7 days)
+ * @param incidentRetention  closed incidents kept this long (at most 10 days)
  * @param storeAddress       host:port of the Store's gRPC service (warm start)
  * @param rules              ordered; the first that matches a line watches it
  * @param general            the rule for lines no rule matches
@@ -55,7 +55,7 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
     }
 
     public static final Duration MAX_HISTORY = Duration.ofDays(2);
-    public static final Duration MAX_RETENTION = Duration.ofDays(7);
+    public static final Duration MAX_RETENTION = Duration.ofDays(10);
     static final Set<String> DIRECTIONS = Set.of("up", "down", "both");
 
     public DetectorSettings {
@@ -118,7 +118,7 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
                 SettingsValidator.positive("incident-retention", DetectorSettings::incidentRetention),
                 SettingsValidator.require("incident-retention", s -> s.incidentRetention() == null
                         || s.incidentRetention().compareTo(MAX_RETENTION) <= 0,
-                        "at most 7 days: this is a lab system and the database must stay small"),
+                        "at most 10 days: this is a lab system and the database must stay small"),
                 SettingsValidator.require("store-address", s -> s.storeAddress() != null && s.storeAddress().matches("[^:]+:\\d+"),
                         "must be host:port"),
                 SettingsValidator.require("rules", s -> !s.rules().isEmpty(), "at least one rule is needed"),

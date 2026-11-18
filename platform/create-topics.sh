@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Creates the Kafka topics from design D2. Safe to run again: existing topics are left alone.
+# Creates the Kafka topics from design D2. Safe to run again: existing topics keep their messages; their retention is
+# set to 10 days in place (keep-ten-days T3).
 set -euo pipefail
-TWO_DAYS_MS=172800000
+TEN_DAYS_MS=864000000
 # Wait until Kafka reports healthy (up to about 2 minutes) instead of failing on a cold start
 for _ in $(seq 1 30); do
   [ "$(docker inspect -f '{{.State.Health.Status}}' anomaly-kafka 2>/dev/null)" = healthy ] && break
@@ -18,10 +19,15 @@ create() {  # name partitions extra-configs...
 # What each metric line is: keep only the latest description per line (compacted)
 create metric-series   3 cleanup.policy=compact
 # The numbers: 6 partitions so several readers can share the work; keyed by series id keeps order per line
-create metric-points   6 retention.ms=$TWO_DAYS_MS
+create metric-points   6 retention.ms=$TEN_DAYS_MS
 # Incident opened / updated / closed
-create incident-events 3 retention.ms=$TWO_DAYS_MS
-create incident-commands 1 retention.ms=$TWO_DAYS_MS
+create incident-events 3 retention.ms=$TEN_DAYS_MS
+create incident-commands 1 retention.ms=$TEN_DAYS_MS
 # Spring Cloud Bus: carries "settings changed, reload" to every service (design D5)
 create springCloudBus  1
+# Topics made before keep-ten-days kept 2 days: set 10 days in place (no message is lost)
+for topic in metric-points incident-events incident-commands; do
+  docker exec anomaly-kafka /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter \
+    --entity-type topics --entity-name "$topic" --add-config retention.ms=$TEN_DAYS_MS >/dev/null
+done
 docker exec anomaly-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list

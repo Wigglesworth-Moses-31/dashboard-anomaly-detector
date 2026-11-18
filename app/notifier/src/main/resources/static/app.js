@@ -164,7 +164,7 @@ function lineState(lineId) {
   let st = "";
   for (const id of incidentsOfLine.get(lineId) || []) {
     const inc = incidents.get(id);
-    if (!inc || inc.state === "INCIDENT_STATE_CLOSED") continue;
+    if (!inc || inc.state === "INCIDENT_STATE_CLOSED" || inc.found_in_backfill) continue;   // past (add-backfill)
     const s = (inc.series || []).find((x) => x.series_id === lineId);
     if (!s) continue;
     if (s.bau) { st = st || "bau"; continue; }
@@ -242,7 +242,7 @@ function onLine(text) {
   lastChangeAt = Date.now();
   if (staging) { const prev = staging.get(msg.incident_id); if (!prev || Number(msg.sequence) > Number(prev.sequence)) staging.set(msg.incident_id, msg); return; }
   apply(msg);
-  if (msg.type === "EVENT_TYPE_OPENED" && caughtUp && (msg.incident.series || []).some((s) => !s.bau)) newlyOpened.push(msg.incident);
+  if (msg.type === "EVENT_TYPE_OPENED" && caughtUp && !msg.incident.found_in_backfill && (msg.incident.series || []).some((s) => !s.bau)) newlyOpened.push(msg.incident);
   if (newlyOpened.length) notify(newlyOpened.splice(0));
   markAttention(); rerenderMetricAnomalies(); clearAnswered(msg.incident);
 }
@@ -367,7 +367,7 @@ function shadingFor(lines, from) {
       const start = Math.max(from, Number(inc.started_ms)), end = Number(inc.ended_ms) || Date.now();
       if (end < from) continue;
       const allBau = (inc.series || []).every((s) => s.bau);
-      const kind = inc.state !== "INCIDENT_STATE_CLOSED" && !allBau ? "live" : "past";
+      const kind = inc.state !== "INCIDENT_STATE_CLOSED" && !allBau && !inc.found_in_backfill ? "live" : "past";
       spans[kind].push([start, end]); names[kind].push(inc.title);
     }
   }
@@ -661,13 +661,14 @@ async function drawAnomalies(list, lineId) {
   }
   const byId = new Map();
   for (const o of pastCache.data.all || []) byId.set(o.incidentId, { id: o.incidentId, title: o.title, start: Number(o.startedMs), end: Number(o.endedMs), signal: o.signal,
-    direction: o.direction, peak: o.peak, normal: o.normal, unit: o.unit, reason: o.reason, state: Number(o.endedMs) ? "closed" : "open" });
+    direction: o.direction, peak: o.peak, normal: o.normal, unit: o.unit, reason: o.reason,
+    state: o.reason === "found in backfill" ? "past" : Number(o.endedMs) ? "closed" : "open" });
   for (const id of incidentsOfLine.get(lineId) || []) {
     const inc = incidents.get(id); if (!inc) continue;
     const s = (inc.series || []).find((x) => x.series_id === lineId); if (!s) continue;
     byId.set(id, { id, title: inc.title, start: Number(inc.started_ms), end: Number(inc.ended_ms), signal: s.signal, direction: s.reason, peak: s.peak_value,
       normal: s.normal_value, unit: s.unit, reason: s.bau ? "BAU" : s.explanation || (inc.state === "INCIDENT_STATE_CLOSED" ? inc.reason : ""),
-      state: inc.state === "INCIDENT_STATE_CLOSED" ? "closed" : inc.state === "INCIDENT_STATE_CALM" ? "needs a reason" : "open", inc, s });
+      state: inc.found_in_backfill ? "past" : inc.state === "INCIDENT_STATE_CLOSED" ? "closed" : inc.state === "INCIDENT_STATE_CALM" ? "needs a reason" : "open", inc, s });
   }
   const rows = [...byId.values()].sort((a, b) => b.start - a.start);
   list.textContent = "";
@@ -675,12 +676,13 @@ async function drawAnomalies(list, lineId) {
   for (const r of rows) {
     const row = el("div", "anom" + (r.s && r.s.bau ? " bau" : "") + " st-" + r.state.replace(/ /g, "-"));
     const head = el("div", "anom-head");
-    head.append(el("span", "anom-state", r.state === "open" ? "● open" : r.state === "needs a reason" ? "● needs a reason" : "closed"),
+    head.append(el("span", "anom-state", r.state === "open" ? "● open" : r.state === "needs a reason" ? "● needs a reason" : r.state === "past" ? "past · found in backfill" : "closed"),
       el("span", "anom-what", (r.signal || "line") + " " + (r.direction || "") + (r.direction === "silent" ? "" : " · " + change(r))),
       el("span", "muted", "peak " + withUnit(r.peak, r.unit) + " · normal " + withUnit(r.normal, r.unit)));
     const when = el("div", "muted anom-when", shortTime(r.start) + " · " + (r.end ? "lasted " + duration(r.end - r.start) : "for " + duration(Date.now() - r.start)));
     row.append(head, when);
-    if (r.reason) row.append(el("div", "anom-reason", "Reason: " + r.reason + (r.s && r.s.explained_ms ? " · given " + shortTime(r.s.explained_ms) : "")));
+    if (r.state === "past") row.append(el("div", "anom-reason muted", "Found when this dashboard's last days were pulled in; no reason needed."));
+    else if (r.reason) row.append(el("div", "anom-reason", "Reason: " + r.reason + (r.s && r.s.explained_ms ? " · given " + shortTime(r.s.explained_ms) : "")));
     else if (r.inc && isWaiting(r.inc, r.s)) row.append(reasonBoxes(r.inc, lineId));
     else row.append(el("div", "anom-reason muted", "Reason: —"));
     list.append(row);

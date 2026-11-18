@@ -811,4 +811,63 @@ class DetectorScenariosTest {
         assertThat(back.incident().getSeriesList()).filteredOn(s -> s.getSeriesId().equals(lat.getSeriesId()))
                 .singleElement().satisfies(s -> assertThat(s.getExplanation()).isEmpty());
     }
+
+    // ---- add-backfill: past days of a new dashboard -------------------------------------------------------------
+
+    private List<Change> past(SeriesDescriptor d, long ts, double v) {
+        List<Change> c = detector.accept(d.getSeriesId(), ts, v, false, ts + 20_000, true);
+        changes.addAll(c);
+        return c;
+    }
+
+    private long pastNormal(SeriesDescriptor d, long from, int n, double normal) {
+        for (int i = 0; i < n; i++) {
+            past(d, from + i * STEP, normal + (i % 5) - 2);
+        }
+        return from + n * STEP;
+    }
+
+    @Test
+    void aSpikeInTheBackfillIsRecordedAsPastAndClosesByItself() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = pastNormal(inv, T0, WARM, 138);
+        past(inv, t, 1213);
+        past(inv, t + STEP, 1213);
+        pastNormal(inv, t + 2 * STEP, 14, 138);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getFoundInBackfill()).isTrue());
+        assertThat(calmed()).as("never waits for a reason").isEmpty();
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).singleElement().satisfies(c -> {
+            assertThat(c.incident().getReason()).isEqualTo("found in backfill");
+            assertThat(c.incident().getFoundInBackfill()).isTrue();
+            assertThat(c.incident().getStartedMs()).isEqualTo(t);
+            assertThat(c.incident().getEndedMs()).isPositive();
+        });
+    }
+
+    @Test
+    void anAnomalyStillGoingOnWhenLiveValuesArriveContinuesAsLive() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = pastNormal(inv, T0, WARM, 138);
+        past(inv, t, 1213);
+        past(inv, t + STEP, 1213);                                    // the backfill ends inside the anomaly
+        String id = of(EventType.EVENT_TYPE_OPENED).get(0).incident().getIncidentId();
+        value(inv, t + 2 * STEP, 1250);                               // the first live value, still abnormal
+        List<Change> opened = of(EventType.EVENT_TYPE_OPENED);
+        assertThat(opened).hasSize(2);
+        assertThat(opened.get(1).incident().getIncidentId()).isEqualTo(id);
+        assertThat(opened.get(1).incident().getFoundInBackfill()).isFalse();
+        normal(inv, t + 3 * STEP, 14, 138);
+        assertThat(calmed()).as("live now: it waits for a reason like any other").hasSize(1);
+    }
+
+    @Test
+    void theBackfillWarmsTheLineSoLiveValuesAreJudgedAtOnce() {
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        long t = pastNormal(inv, T0, WARM, 138);                       // 15 minutes of past values only
+        value(inv, t, 1213);
+        value(inv, t + STEP, 1213);
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getFoundInBackfill()).isFalse());
+    }
 }

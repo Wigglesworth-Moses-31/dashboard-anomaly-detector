@@ -99,15 +99,34 @@ public final class IncidentBook {
     // ---- events from lines ------------------------------------------------------------------------------------
 
     public List<Change> on(LineWatch line, LineWatch.Event event, long ts, long arrivedMs) {
+        return on(line, event, ts, arrivedMs, false);
+    }
+
+    /** True while the value being judged was backfilled (add-backfill B4): a new incident is then found in backfill. */
+    private boolean backfill;
+    public static final String FOUND_IN_BACKFILL = "found in backfill";
+
+    public List<Change> on(LineWatch line, LineWatch.Event event, long ts, long arrivedMs, boolean backfill) {
+        this.backfill = backfill;
         String id = line.facts().seriesId();
         Open member = bySeries.get(id);
-        return switch (event) {
+        List<Change> out = switch (event) {
             case SPIKE_STARTED, SILENT -> join(line, ts, arrivedMs);
             case RESPIKED -> member == null ? join(line, ts, arrivedMs) : respike(member, line, ts, arrivedMs);
             case PEAK -> member == null ? List.of() : peak(member, line, ts, arrivedMs);
             case CALMED -> member == null ? List.of() : calmed(member, line, arrivedMs);
             default -> List.of();
         };
+        if (!backfill) {                                     // a live value on an incident still marked: happening now
+            Open o = bySeries.get(id);
+            if (o != null && o.foundInBackfill && o.state == IncidentState.INCIDENT_STATE_OPEN) {
+                o.foundInBackfill = false;
+                List<Change> all = new ArrayList<>(out);
+                all.add(o.change(EventType.EVENT_TYPE_OPENED, ts, arrivedMs));
+                return all;
+            }
+        }
+        return out;
     }
 
     private List<Change> join(LineWatch line, long ts, long arrivedMs) {
@@ -126,6 +145,7 @@ public final class IncidentBook {
                 open.members.values().forEach(x -> bySeries.put(x.seriesId, waiting));
             } else {
                 open = new Open(ids.get(), group, line.spikeStart(), this::multiSite);
+                open.foundInBackfill = backfill;
             }
             opened = true;
             byGroup.put(group.key(), open);
@@ -213,6 +233,12 @@ public final class IncidentBook {
         open.endedMs = ended;
         byGroup.remove(open.group.key());
         open.members.keySet().forEach(bySeries::remove);
+        if (open.foundInBackfill) {                             // past: closes by itself, asks for nothing (add-backfill B4)
+            open.state = IncidentState.INCIDENT_STATE_CLOSED;
+            open.reason = FOUND_IN_BACKFILL;
+            open.resolvedMs = arrivedMs;
+            return List.of(open.change(EventType.EVENT_TYPE_CLOSED, open.endedMs, arrivedMs));
+        }
         if (allExplained(open)) {                               // every line BAU or explained: closes (L3)
             return closeNow(open, arrivedMs);
         }
@@ -359,6 +385,7 @@ public final class IncidentBook {
             sitesSeen.add(site);
         }
         Open open = new Open(incident.getIncidentId(), group, incident.getStartedMs(), this::multiSite);
+        open.foundInBackfill = incident.getFoundInBackfill();
         open.sequence = sequence;
         open.lastUpdateTs = incident.getStartedMs();
         open.lastAnnouncedMs = System.currentTimeMillis();      // it was announced before the restart
@@ -484,6 +511,7 @@ public final class IncidentBook {
         String reason = "";
         long resolvedMs;
         long lastAnnouncedMs;
+        boolean foundInBackfill;                                         // add-backfill B4
 
         final java.util.function.BooleanSupplier multiSite;
 
@@ -510,7 +538,8 @@ public final class IncidentBook {
         Incident toProto(IncidentState state, long ts) {
             Incident.Builder b = Incident.newBuilder().setIncidentId(id).setState(state).setTitle(title())
                     .setStartedMs(startedMs).setEndedMs(state == IncidentState.INCIDENT_STATE_OPEN ? 0 : endedMs)
-                    .setGroupKey(group.key()).setUpstream(group.upstream()).setReason(reason).setResolvedMs(resolvedMs);
+                    .setGroupKey(group.key()).setUpstream(group.upstream()).setReason(reason).setResolvedMs(resolvedMs)
+                    .setFoundInBackfill(foundInBackfill);
             members.values().forEach(m -> b.addSeries(m.toProto()));
             long to = (state == IncidentState.INCIDENT_STATE_OPEN ? ts : endedMs) + LINK_MARGIN_MS;
             Map<String, Link> all = new LinkedHashMap<>(links);

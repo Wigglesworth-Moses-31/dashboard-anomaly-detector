@@ -210,3 +210,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 .anom-when { margin-top: 2px; } .anom-reason { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
 .reasons .reason-box { margin-top: 6px; } .others { margin-top: 6px; } .others a { color: var(--blue); }
 @media (max-width: 760px) { .metric-top { grid-template-columns: 1fr; } .panels { grid-template-columns: 1fr; } .range-note { margin-left: 0; } }
+
+/* add-backfill */
+.s-progress { color: var(--blue); font-size: 12px; margin-top: 4px; }
+.anom.st-past { border-left-color: var(--grey); opacity: .75; }

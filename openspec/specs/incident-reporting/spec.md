@@ -75,34 +75,17 @@ report.
 - **WHEN** the Reporter restarts after writing the report but before the clean-up
 - **THEN** after the restart the report is not written again, and the clean-up completes
 
-### Requirement: Clean up only after the report is verified
-Raw points of a window SHALL be removed only after its report is verified, and never the points of the last hour
-before the window's end (a setting), which the Detector needs to restart warm; the Store keeps the last 3 hours
-in any case.
-
-#### Scenario: Report fails
-- **WHEN** writing the report fails (for example the disk is full)
-- **THEN** no point is removed, and the Reporter tries again later
-
-#### Scenario: Detector restarts just after midnight
-- **WHEN** the day's clean-up has run and the Detector restarts at 00:10
-- **THEN** the Store still holds the raw points from 23:00 on
-
-### Requirement: Data still arriving is never removed
-The clean-up SHALL remove only points older than the end of a window that has ended, so points still arriving for
-the open window are never removed.
-
-#### Scenario: Points arriving during the clean-up
-- **WHEN** the clean-up for 16 November runs at 00:02 on the 17th while points for 00:01 arrive
-- **THEN** none of the 17th's points are removed
-
 ### Requirement: Missed windows are caught up
-After a stop, the Reporter SHALL report every window it missed, oldest first, as far back as the data still exists,
-and SHALL say in the headline when a window's data was incomplete.
+After a stop, the Reporter SHALL report every window it missed, oldest first, as far back as the data still exists
+(up to 10 days), and SHALL say in the headline when a window's data was incomplete.
 
 #### Scenario: Reporter down for a night
 - **WHEN** the Reporter was stopped from 22:00 on the 16th to 09:00 on the 17th
-- **THEN** after it starts, the report for the 16th is written, then cleaned
+- **THEN** after it starts, the report for the 16th is written
+
+#### Scenario: Down for five days
+- **WHEN** the Reporter was stopped for 5 days
+- **THEN** after it starts, the five missed reports are written, oldest first
 
 ### Requirement: Report files stay few
 The output folder SHALL keep the most recent reports up to a set number (default 30) and remove older ones.
@@ -125,3 +108,10 @@ Every time in a report SHALL appear in each display zone, in the same form as on
 #### Scenario: An incident in a report
 - **WHEN** a report lists an incident that started at 13:04:10 UTC on 17 Nov 2026
 - **THEN** its start reads `13:04:10 UTC · 18:34:10 IST · 08:04:10 EST`
+
+### Requirement: Reports never remove data
+Writing a report SHALL NOT remove raw points or summaries; data is removed only by age (10 days by default).
+
+#### Scenario: After the report
+- **WHEN** the report for 16 November has been written and verified
+- **THEN** the raw points of 16 November are still stored

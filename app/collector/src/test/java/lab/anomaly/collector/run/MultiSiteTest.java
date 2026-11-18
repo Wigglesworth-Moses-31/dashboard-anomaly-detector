@@ -555,4 +555,92 @@ class MultiSiteTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> envFile.get("PLATFORM_DB_PASSWORD"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ---- add-backfill: never-collected views get their last days first -------------------------------------------
+
+    /** Each dashboard has its own questions; every answer has a finished value at the start of the asked window. */
+    static final class BackfillSite extends StubSite {
+        BackfillSite(String site) {
+            super(site, 3);
+        }
+
+        @Override
+        public Dashboard dashboard(String id) throws SourceException {
+            Dashboard d = super.dashboard(id);
+            List<Dashboard.Panel> own = d.panels().stream().map(p -> new Dashboard.Panel(p.title(), p.path(),
+                    List.of(new Dashboard.Query("query1", p.queries().get(0).text().replace("}", ",dash:" + id + "}"))), p.formulas())).toList();
+            return new Dashboard(id, d.title(), List.of(), own, 0);
+        }
+
+        @Override
+        public TimeseriesAnswer timeseries(TimeseriesRequest request) throws SourceException {
+            calls.incrementAndGet();
+            long t = (request.fromMs() / 10_000) * 10_000;
+            List<TimeseriesAnswer.Series> series = new ArrayList<>();
+            for (int i = 0; i < request.formulas().size(); i++) {
+                series.add(new TimeseriesAnswer.Series(i, Map.of(), List.of(1.0 + i)));
+            }
+            return new TimeseriesAnswer(List.of(t), series, System.currentTimeMillis(), null);
+        }
+    }
+
+    @Test
+    void onlyNewViewsAreBackfilledOldestFirstThenPolledLive() throws Exception {
+        java.util.List<MetricPoints> sent = java.util.Collections.synchronizedList(new ArrayList<>());
+        current.set(settings(source("us", "datadoghq.com", "d1", "d2")));
+        engine = new CollectorEngine(current::get, version::get,
+                c -> DatadogCredentials.fromEnvironment(env, c.apiKeyEnv(), c.appKeyEnv(), c.name()),
+                (c, credentials, clock) -> new BackfillSite(c.site()), null, Clock.systemUTC());
+        engine.setCollectedViews(() -> Optional.of(java.util.Set.of("datadoghq.com|d1")), Duration.ofHours(2), Duration.ofHours(1), 0);
+        engine.startLive(new MessageSink() {
+            @Override public void send(SeriesDescriptor d) { }
+            @Override public void send(MetricPoints p) { sent.add(p); }
+        });
+        waitUntil(() -> engine.lane("us") != null && engine.lane("us").unitCount() == 6, 3000);
+        waitUntil(() -> sent.stream().filter(MetricPoints::getBackfill).count() >= 6, 5000);     // 3 panels × 2 windows
+        waitUntil(() -> engine.held().isEmpty(), 3000);
+        java.util.List<MetricPoints> backfill = sent.stream().filter(MetricPoints::getBackfill).toList();
+        assertThat(backfill).hasSize(6);
+        // oldest first: the first window's points come before the second's
+        assertThat(backfill.get(0).getPoints(0).getTsMs()).isLessThan(backfill.get(5).getPoints(0).getTsMs());
+        assertThat(engine.backfills()).isEmpty();
+        int liveBefore = (int) sent.stream().filter(m -> !m.getBackfill()).count();
+        waitUntil(() -> sent.stream().filter(m -> !m.getBackfill()).count() >= liveBefore + 6, 3000);   // all 6 polled live now
+        engine.stop();
+
+        java.util.List<MetricPoints> again = java.util.Collections.synchronizedList(new ArrayList<>());
+        engine = new CollectorEngine(current::get, version::get,
+                c -> DatadogCredentials.fromEnvironment(env, c.apiKeyEnv(), c.appKeyEnv(), c.name()),
+                (c, credentials, clock) -> new BackfillSite(c.site()), null, Clock.systemUTC());
+        engine.setCollectedViews(() -> Optional.of(java.util.Set.of("datadoghq.com|d1", "datadoghq.com|d2")), Duration.ofHours(2), Duration.ofHours(1), 0);
+        engine.startLive(new MessageSink() {
+            @Override public void send(SeriesDescriptor d) { }
+            @Override public void send(MetricPoints p) { again.add(p); }
+        });
+        waitUntil(() -> again.size() >= 6, 3000);
+        Thread.sleep(3 * INTERVAL_MS);
+        assertThat(again).as("a restart backfills nothing").noneMatch(MetricPoints::getBackfill);
+    }
+
+    @Test
+    void whileTheStoreCannotBeAskedNewUnitsWait() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean storeUp = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.List<MetricPoints> sent = java.util.Collections.synchronizedList(new ArrayList<>());
+        current.set(settings(source("us", "datadoghq.com", "d1")));
+        engine = new CollectorEngine(current::get, version::get,
+                c -> DatadogCredentials.fromEnvironment(env, c.apiKeyEnv(), c.appKeyEnv(), c.name()),
+                (c, credentials, clock) -> new BackfillSite(c.site()), null, Clock.systemUTC());
+        engine.setCollectedViews(() -> storeUp.get() ? Optional.of(java.util.Set.of()) : Optional.empty(), Duration.ofHours(1), Duration.ofHours(1), 0);
+        engine.startLive(new MessageSink() {
+            @Override public void send(SeriesDescriptor d) { }
+            @Override public void send(MetricPoints p) { sent.add(p); }
+        });
+        waitUntil(() -> engine.lane("us") != null && engine.lane("us").unitCount() == 3, 3000);
+        Thread.sleep(3 * INTERVAL_MS);
+        assertThat(sent).as("nothing polled while the Store's answer is awaited").isEmpty();
+        assertThat(engine.held()).hasSize(3);
+        storeUp.set(true);
+        waitUntil(() -> sent.stream().anyMatch(MetricPoints::getBackfill), 15_000);
+        waitUntil(() -> sent.stream().anyMatch(m -> !m.getBackfill()), 5_000);
+    }
 }

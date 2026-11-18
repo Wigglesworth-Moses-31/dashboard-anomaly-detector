@@ -50,4 +50,25 @@ public class StoreStats {
     public long totalLag() {
         return lagByTopic.values().stream().mapToLong(Long::longValue).sum();
     }
+
+    // keep-ten-days T1: the oldest and newest time of values saved outside the per-minute refresh window, so their
+    // per-minute summaries are refreshed once (then cleared)
+    private long lateFrom = Long.MAX_VALUE;
+    private long lateTo = Long.MIN_VALUE;
+
+    public synchronized void noteLate(long tsMs) {
+        lateFrom = Math.min(lateFrom, tsMs);
+        lateTo = Math.max(lateTo, tsMs);
+    }
+
+    /** The late range to refresh, or null; cleared when taken. */
+    public synchronized long[] takeLate() {
+        if (lateFrom == Long.MAX_VALUE) {
+            return null;
+        }
+        long[] r = {lateFrom, lateTo};
+        lateFrom = Long.MAX_VALUE;
+        lateTo = Long.MIN_VALUE;
+        return r;
+    }
 }

@@ -40,7 +40,7 @@ class DetectorSettingsTest {
 
     @Test
     void keepingIncidentsForAMonthIsRejected() {
-        rejected(Map.of("anomaly.detector.incident-retention", "30d"), "incident-retention: at most 7 days");
+        rejected(Map.of("anomaly.detector.incident-retention", "30d"), "incident-retention: at most 10 days");
     }
 
     @Test

@@ -100,6 +100,11 @@ public final class Detector {
 
     /** Judges one value; returns the incident changes it caused. */
     public List<Change> accept(String seriesId, long ts, double value, boolean partial, long arrivedMs) {
+        return accept(seriesId, ts, value, partial, arrivedMs, false);
+    }
+
+    /** As above; {@code backfill}: the value was pulled for a new dashboard's past days (add-backfill B4). */
+    public List<Change> accept(String seriesId, long ts, double value, boolean partial, long arrivedMs, boolean backfill) {
         if (partial) {
             return List.of();                                  // never judged, never in the history (spec)
         }
@@ -125,7 +130,7 @@ public final class Detector {
             watermarks.merge(v.getViewId(), ts, Math::max);
         }
         queryWatermarks.merge(line.facts().queryId(), ts, Math::max);
-        return book.on(line, event, ts, arrivedMs);
+        return book.on(line, event, ts, arrivedMs, backfill);
     }
 
     /**

@@ -12,7 +12,7 @@ import lab.anomaly.kit.settings.SettingsValidator;
  * @param window        report window: 1, 2, 3, 4, 6, 8, 12 or 24 hours (divides a day; never more than a day)
  * @param grace         wait after a window ends before reporting it
  * @param keepBeforeEnd raw points kept before the window's end (the Store keeps the last 3 hours anyway)
- * @param catchUp       how far back missed windows are reported (at most 2 days: what Kafka and the Store keep)
+ * @param catchUp       how far back missed windows are reported (at most 10 days: what Kafka and the Store keep)
  * @param outputDir     folder of the reports and the state file
  * @param keepReports   report files kept, oldest removed first
  * @param storeAddress  host:port of the Store's gRPC
@@ -29,8 +29,8 @@ public record ReporterSettings(Duration window, Duration grace, Duration keepBef
                 SettingsValidator.positive("grace", ReporterSettings::grace),
                 SettingsValidator.positive("keep-before-end", ReporterSettings::keepBeforeEnd),
                 SettingsValidator.positive("catch-up", ReporterSettings::catchUp),
-                SettingsValidator.require("catch-up", s -> s.catchUp() == null || s.catchUp().compareTo(Duration.ofDays(2)) <= 0,
-                        "at most 2 days: older data is no longer kept"),
+                SettingsValidator.require("catch-up", s -> s.catchUp() == null || s.catchUp().compareTo(Duration.ofDays(10)) <= 0,
+                        "at most 10 days: older data is no longer kept"),
                 SettingsValidator.require("output-dir", s -> s.outputDir() != null && !s.outputDir().isBlank(), "must not be empty"),
                 SettingsValidator.require("keep-reports", s -> s.keepReports() >= 1, "must be at least 1"),
                 SettingsValidator.require("store-address", s -> s.storeAddress() != null && s.storeAddress().matches("[^:]+:\\d+"), "must be host:port"));

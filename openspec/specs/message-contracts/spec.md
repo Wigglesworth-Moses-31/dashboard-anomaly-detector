@@ -170,3 +170,27 @@ a stream.
 #### Scenario: Building the page's catalogue
 - **WHEN** the Notifier starts
 - **THEN** one question gives it every line's description, with its views and their order
+
+### Requirement: Messages are kept 10 days, compressed
+Every topic SHALL keep its messages 10 days, and every producer SHALL compress its messages (zstd). Existing topics
+SHALL be changed in place when the system starts, without losing messages.
+
+#### Scenario: Topic settings
+- **WHEN** the topics are described after start
+- **THEN** each shows a retention of 10 days
+
+#### Scenario: Smaller on disk
+- **WHEN** the same recording is replayed with and without compression
+- **THEN** the bytes on disk per message are smaller with compression, and the ratio is written down
+
+### Requirement: Points and incidents say when they come from backfill
+A batch of points SHALL be able to say it was pulled as backfill, and an incident SHALL be able to say it was found
+in backfill. Both SHALL be new fields, so older readers keep working.
+
+#### Scenario: Backfilled points
+- **WHEN** the Collector sends a 2-day-old window of a new dashboard
+- **THEN** its point batches say "backfill"
+
+#### Scenario: Older reader
+- **WHEN** a reader built before this change reads a backfilled batch
+- **THEN** it reads the points as usual

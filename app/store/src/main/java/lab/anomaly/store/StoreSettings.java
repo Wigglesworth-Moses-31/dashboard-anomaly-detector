@@ -7,7 +7,7 @@ import org.springframework.util.unit.DataSize;
 
 /**
  * The Store's settings (config-repo/store.yml, prefix {@code anomaly.store}). Immutable.
- * Lab system, never production (user, 15 Nov 2026): nothing may be kept longer than 7 days; defaults are 2 days.
+ * Lab system, never production (user, 15 Nov 2026): nothing may be kept longer than 10 days (user, 18 Nov 2026), the default.
  */
 public record StoreSettings(
         int grpcPort,
@@ -19,7 +19,7 @@ public record StoreSettings(
         DataSize maxDatabaseSize,
         Duration sizeCheckInterval) {
 
-    public static final Duration CEILING = Duration.ofDays(7);
+    public static final Duration CEILING = Duration.ofDays(10);
 
     static List<SettingsValidator<? super StoreSettings>> validators() {
         return List.of(
@@ -27,9 +27,9 @@ public record StoreSettings(
                 SettingsValidator.positive("raw-safety-limit", StoreSettings::rawSafetyLimit),
                 SettingsValidator.positive("summary-retention", StoreSettings::summaryRetention),
                 SettingsValidator.require("raw-safety-limit", s -> s.rawSafetyLimit() == null || s.rawSafetyLimit().compareTo(CEILING) <= 0,
-                        "at most 7 days: this is a lab system and the database must stay small"),
+                        "at most 10 days: this is a lab system and the database must stay small"),
                 SettingsValidator.require("summary-retention", s -> s.summaryRetention() == null || s.summaryRetention().compareTo(CEILING) <= 0,
-                        "at most 7 days: this is a lab system and the database must stay small"),
+                        "at most 10 days: this is a lab system and the database must stay small"),
                 SettingsValidator.require("raw-safety-limit", s -> s.rawSafetyLimit() == null || s.rawSafetyLimit().compareTo(Duration.ofDays(1)) >= 0,
                         "at least 1 day: a report covers up to one day of raw points"),
                 SettingsValidator.require("max-batch-records", s -> s.maxBatchRecords() >= 1 && s.maxBatchRecords() <= 5000, "must be between 1 and 5000"),

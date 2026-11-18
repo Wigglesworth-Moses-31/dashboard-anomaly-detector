@@ -12,6 +12,7 @@ message MetricPoints {
   string series_id = 1;
   int64 collected_ms = 2;               // when the Collector received them, UTC milliseconds
   repeated Point points = 3;            // oldest first; a step with no data is left out, never sent as 0
+  bool backfill = 4;                    // added in add-backfill: pulled for a newly watched view (its last days), not live
 }
 
 message Point {

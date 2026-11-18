@@ -28,13 +28,13 @@ class StoreSettingsTest {
     @Test
     void keepingRawPointsForAMonthIsRejected() {
         assertThat(problems(with(Duration.ofDays(30), Duration.ofDays(2))))
-                .containsExactly("raw-safety-limit: at most 7 days: this is a lab system and the database must stay small");
+                .containsExactly("raw-safety-limit: at most 10 days: this is a lab system and the database must stay small");
     }
 
     @Test
     void keepingSummariesForTwoWeeksIsRejected() {
         assertThat(problems(with(Duration.ofDays(2), Duration.ofDays(14))))
-                .containsExactly("summary-retention: at most 7 days: this is a lab system and the database must stay small");
+                .containsExactly("summary-retention: at most 10 days: this is a lab system and the database must stay small");
     }
 
     @Test

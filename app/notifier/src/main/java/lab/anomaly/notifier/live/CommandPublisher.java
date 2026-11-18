@@ -29,6 +29,7 @@ public class CommandPublisher implements AutoCloseable {
     public CommandPublisher(String bootstrap) {
         Properties config = new Properties();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "zstd");             // keep-ten-days T3: smaller on disk
         config.put(ProducerConfig.CLIENT_ID_CONFIG, "notifier-commands");
         config.put(ProducerConfig.ACKS_CONFIG, "all");
         config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);

@@ -41,6 +41,9 @@ async function load() {
   if (!s.ok) { $("sRegions").textContent = "Settings unavailable: " + s.problem; return; }
   state = s.data; keys = k.ok ? k.data : []; health = h.ok ? h.data : {};
   render();
+  const running = (health.components && health.components.collector && health.components.collector.details
+    && Object.keys(health.components.collector.details.backfill || {}).length) || 0;
+  if (running && location.hash === "#settings") setTimeout(() => { if (location.hash === "#settings") load(); }, 5000);   // progress moves
 }
 
 function feedback(box, text, bad) {
@@ -112,6 +115,10 @@ function regionCard(r) {
   head.append(actions, out);
   card.append(head);
   for (const w of laneWarnings(r.name)) card.append(el("div", "s-warn", w));
+  const bf = (health.components && health.components.collector && health.components.collector.details && health.components.collector.details.backfill) || {};
+  for (const [view, pct] of Object.entries(bf)) {                 // add-backfill: "Shop (datadoghq.eu)" → "45%"
+    if (view.endsWith("(" + r.site + ")")) card.append(el("div", "s-progress", "Pulling the last 2 days of " + view.slice(0, view.lastIndexOf(" (")) + ": " + pct));
+  }
   card.append(keyBox);
   const table = el("div", "s-dash");
   for (const d of r.dashboards || []) table.append(dashboardRow(r, d));

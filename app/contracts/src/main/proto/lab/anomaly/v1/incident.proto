@@ -29,6 +29,7 @@ message Incident {
   bool upstream = 9;                    // the group is an upstream service (a service being called)
   string reason = 10;                   // added in add-incident-resolution: why it happened, given by a person; "" until closed
   int64 resolved_ms = 11;               // when the reason was given (UTC milliseconds); 0 until closed
+  bool found_in_backfill = 12;          // added in add-backfill: found in a new view's past days; closes by itself, never notifies
 }
 
 // A person's request to close an incident with its reason (add-incident-resolution). Topic incident-commands,

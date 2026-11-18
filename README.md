@@ -209,19 +209,35 @@ change it). Also since 18 Nov 2026: regions live in `regions.yml`. Nothing to do
 the Settings tab moves `sources:` out of `collector.yml` in its own commit, comments kept. The Collector now reads
 its keys from `.env` itself (start with the new `scripts/system.sh`). A `collector.yml` in the old single-site form
 (`datadog-site` with `dashboards`) is shown read-only in the Settings tab: run `scripts/setup.sh` again to manage
-regions there.
+regions there. Since 18 Nov 2026 (later): everything is kept 10 days — in `store.yml` set `raw-safety-limit: 10d`,
+`summary-retention: 10d`, `history-max-range: 10d`; in `detector.yml` `incident-retention: 10d`; in `reporter.yml`
+`catch-up: 10d` (the Kafka topics are changed by `scripts/system.sh start`). Optional in `collector.yml`:
+`backfill-new-views`, `backfill-window` (defaults 2d and 4h); in `notifier.yml` the dashboard `ranges` gain `10d`.
 
 ## Storage stays small
 
-| Kept | How long |
-|---|---|
-| Raw 10-second values | Removed after each report (the last 3 hours always stay); never more than 2 days |
-| Per-minute summaries, incidents | 2 days (at most 7) |
-| Kafka messages | 2 days |
-| Reports | The last 30 files |
+Everything is kept **10 days** (the most any setting allows; lab system) and stored compressed:
 
-The Store's health turns **DEGRADED** above 1 GB, so a stopped clean-up is noticed. About 160 bytes per raw value:
-226 lines take about 340 MB a day.
+| Kept | How long | Stored |
+|---|---|---|
+| Raw 10-second values | 10 days, removed by age (reports remove nothing) | Compressed after 6 hours (TimescaleDB, per line in time order; 4.1× on this machine's small sample) |
+| Per-minute summaries | 10 days | Compressed after 3 days |
+| Incidents and their reasons | 10 days after closing; open and waiting ones until closed | One row each |
+| Kafka messages | 10 days | Compressed by the producers (zstd) |
+| Reports | The last 30 files | |
+
+The Store's health shows each table's size and, once chunks are compressed, its size before and after compression
+("compressed"); it turns **DEGRADED** above 1 GB, so a stopped clean-up is noticed.
+
+## A new dashboard starts with its last 2 days
+
+When a dashboard (or a saved view) is watched for the first time, at first-time setup or when added in the Settings
+tab, the Collector first pulls its **last 2 days at 10-second detail** from Datadog (read-only), 4 hours per call,
+oldest first, through the region's own rate limit; then its live polling starts. The Settings tab shows "Pulling the
+last 2 days of Shop: 45%". Anomalies inside those 2 days are found and listed on the metric pages as **past · found
+in backfill**: closed, no notification, no reason needed; one still going on when the 2 days end continues as live.
+A restart or an edit never pulls them again (the Store remembers which views it has). Settings in `collector.yml`:
+`backfill-new-views: 2d` (0s = off, at most 10d), `backfill-window: 4h`.
 
 ## Without Datadog (replay)
 

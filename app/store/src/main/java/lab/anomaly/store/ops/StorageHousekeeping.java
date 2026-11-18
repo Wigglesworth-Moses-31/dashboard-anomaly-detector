@@ -28,9 +28,13 @@ public class StorageHousekeeping {
     private volatile Map<String, Long> tableBytes = Map.of();
     private volatile String sizeError = "";
 
-    public StorageHousekeeping(JdbcTemplate jdbc, SettingsHolder<StoreSettings> settings) {
+    private final StoreStats stats;
+    private volatile Map<String, long[]> compression = Map.of();
+
+    public StorageHousekeeping(JdbcTemplate jdbc, SettingsHolder<StoreSettings> settings, StoreStats stats) {
         this.jdbc = jdbc;
         this.settings = settings;
+        this.stats = stats;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -46,6 +50,7 @@ public class StorageHousekeeping {
                     applyPolicies(settings.get());
                     appliedVersion = settings.snapshot().version();
                 }
+                refreshLate();
                 long now = System.currentTimeMillis();
                 if (now >= nextSizeCheck) {
                     measure();
@@ -76,7 +81,49 @@ public class StorageHousekeeping {
         jdbc.execute("SELECT remove_continuous_aggregate_policy('metrics.points_1m', if_exists => true)");
         jdbc.execute("SELECT add_continuous_aggregate_policy('metrics.points_1m', start_offset => INTERVAL '3 hours', "
                 + "end_offset => INTERVAL '1 minute', schedule_interval => INTERVAL '1 minute')");
-        log.info("Storage limits applied: raw points {} , per-minute summaries {}", raw, summary);
+        compress();
+        log.info("Storage limits applied: raw points {} , per-minute summaries {}; compressed after {} and {}", raw, summary,
+                RAW_COMPRESS_AFTER, SUMMARY_COMPRESS_AFTER);
+    }
+
+    /** Raw values compressed after 6 hours, per-minute ones after 3 days (past any backfill), keep-ten-days T1. */
+    static final String RAW_COMPRESS_AFTER = "6 hours";
+    static final String SUMMARY_COMPRESS_AFTER = "3 days";
+
+    /**
+     * Turns on column-wise compression once (one line's values side by side: segment by series, order by time) and
+     * sets the policies; new raw chunks cover 6 hours, so a chunk is compressed soon after it is full.
+     */
+    void compress() {
+        Boolean raw = jdbc.queryForObject("SELECT compression_enabled FROM timescaledb_information.hypertables "
+                + "WHERE hypertable_schema = 'metrics' AND hypertable_name = 'points'", Boolean.class);
+        if (!Boolean.TRUE.equals(raw)) {
+            jdbc.execute("ALTER TABLE metrics.points SET (timescaledb.compress, timescaledb.compress_segmentby = 'series_id', "
+                    + "timescaledb.compress_orderby = 'ts')");
+        }
+        jdbc.execute("SELECT set_chunk_time_interval('metrics.points', INTERVAL '6 hours')");
+        jdbc.execute("SELECT remove_compression_policy('metrics.points', if_exists => true)");
+        jdbc.execute("SELECT add_compression_policy('metrics.points', compress_after => INTERVAL '" + RAW_COMPRESS_AFTER + "')");
+        Boolean summary = jdbc.queryForObject("SELECT compression_enabled FROM timescaledb_information.continuous_aggregates "
+                + "WHERE view_schema = 'metrics' AND view_name = 'points_1m'", Boolean.class);
+        if (!Boolean.TRUE.equals(summary)) {
+            jdbc.execute("ALTER MATERIALIZED VIEW metrics.points_1m SET (timescaledb.compress = true)");
+        }
+        jdbc.execute("SELECT remove_compression_policy('metrics.points_1m', if_exists => true)");
+        jdbc.execute("SELECT add_compression_policy('metrics.points_1m', compress_after => INTERVAL '" + SUMMARY_COMPRESS_AFTER + "')");
+    }
+
+    /** Values saved for times the 3-hour refresh policy no longer covers (backfill, late data): refreshed once. */
+    void refreshLate() {
+        long[] late = stats.takeLate();
+        if (late == null) {
+            return;
+        }
+        long minute = 60_000;
+        java.sql.Timestamp from = new java.sql.Timestamp((late[0] / minute) * minute);
+        java.sql.Timestamp to = new java.sql.Timestamp((late[1] / minute + 1) * minute);
+        jdbc.update("CALL refresh_continuous_aggregate('metrics.points_1m', ?, ?)", from, to);
+        log.info("Per-minute summaries refreshed for late values {} .. {}", from.toInstant(), to.toInstant());
     }
 
     void measure() {
@@ -88,6 +135,18 @@ public class StorageHousekeeping {
                 FROM timescaledb_information.continuous_aggregates
                 WHERE view_schema = 'metrics' AND view_name = 'points_1m'""", Long.class));
         sizes.put("metrics.series", jdbc.queryForObject("SELECT pg_total_relation_size('metrics.series')", Long.class));
+        Map<String, long[]> comp = new LinkedHashMap<>();
+        String summaryTable = jdbc.queryForObject("SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name) "
+                + "FROM timescaledb_information.continuous_aggregates WHERE view_schema = 'metrics' AND view_name = 'points_1m'", String.class);
+        for (String[] t : new String[][] {{"metrics.points", "metrics.points"}, {"metrics.points_1m", summaryTable}}) {
+            try {
+                comp.put(t[0], jdbc.query("SELECT coalesce(sum(before_compression_total_bytes), 0), coalesce(sum(after_compression_total_bytes), 0) "
+                        + "FROM hypertable_compression_stats(?::regclass)", rs -> rs.next() ? new long[] {rs.getLong(1), rs.getLong(2)} : new long[2], t[1]));
+            } catch (RuntimeException e) {
+                comp.put(t[0], new long[2]);
+            }
+        }
+        compression = comp;
         tableBytes = sizes;
         totalBytes = jdbc.queryForObject("SELECT pg_database_size(current_database())", Long.class);
         sizeError = "";
@@ -100,6 +159,11 @@ public class StorageHousekeeping {
 
     public long totalBytes() {
         return totalBytes;
+    }
+
+    /** Per table: bytes of compressed chunks before and after compression. */
+    public Map<String, long[]> compression() {
+        return compression;
     }
 
     public Map<String, Long> tableBytes() {
