@@ -98,14 +98,7 @@ public final class CheckDashboards {
             MetricSource source = sources.apply(lane);
             Map<String, Integer> lines = new LinkedHashMap<>();            // unit id → lines, or -1 for an error
             Map<String, String> errors = new LinkedHashMap<>();
-            long to = toMs;
-            long step = settings.step().toMillis();
-            long from = ((to - WINDOW_MS) / step) * step;
-            List<Batch> batches = Batch.pack(units, settings.effectiveBatchFormulas());
-            int calls = 0;
-            for (Batch batch : batches) {
-                calls += ask(source, batch, from, to, step, lines, errors, pauseMs);
-            }
+            int calls = askAll(source, units, settings, toMs, pauseMs, lines, errors);
             out.printf("%n== %s (%s): %d views, %d questions, %d Datadog calls%n", lane.name(), lane.site(), views.size(), units.size(), calls);
             for (WatchedView view : views) {
                 allEmptyView |= printView(out, view, units, lines, errors);
@@ -114,6 +107,21 @@ public final class CheckDashboards {
         out.println();
         out.println(allEmptyView ? "Some views return no lines at all: check their filters (see above)." : "Every view returned lines.");
         return allEmptyView ? 1 : 0;
+    }
+
+    /**
+     * Asks every unit once over the 15 minutes before {@code toMs}, batched like a poll; fills unit id → lines (-1 for
+     * an error) and the errors; returns the number of Datadog calls. Also used by the Settings tab's check.
+     */
+    public static int askAll(MetricSource source, List<PollUnit> units, CollectorSettings settings, long toMs, long pauseMs,
+                             Map<String, Integer> lines, Map<String, String> errors) throws InterruptedException {
+        long step = settings.step().toMillis();
+        long from = ((toMs - WINDOW_MS) / step) * step;
+        int calls = 0;
+        for (Batch batch : Batch.pack(units, settings.effectiveBatchFormulas())) {
+            calls += ask(source, batch, from, toMs, step, lines, errors, pauseMs);
+        }
+        return calls;
     }
 
     /** One call for the batch; when Datadog refuses it, the halves are asked again until the bad question is alone. */
@@ -174,10 +182,11 @@ public final class CheckDashboards {
         return s.length() <= n ? s : s.substring(0, n - 1) + "…";
     }
 
-    static CollectorSettings read(Path repo) throws Exception {
+    /** The Collector's settings from a settings repository, merged as the Config Service does: regions.yml wins. */
+    public static CollectorSettings read(Path repo) throws Exception {
         StandardEnvironment env = new StandardEnvironment();
         YamlPropertySourceLoader yaml = new YamlPropertySourceLoader();
-        for (String name : List.of("collector.yml", "application.yml")) {   // collector.yml wins, as in the Config Service
+        for (String name : List.of("regions.yml", "collector.yml", "application.yml")) {   // first wins, as in the Config Service
             Path f = repo.resolve(name);
             if (Files.isRegularFile(f)) {
                 yaml.load(name, new FileSystemResource(f)).forEach(env.getPropertySources()::addLast);

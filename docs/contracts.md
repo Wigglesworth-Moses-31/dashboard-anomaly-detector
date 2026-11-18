@@ -99,7 +99,9 @@ Added by add-detector (additions only): per line `signal` (errors, traffic, succ
 saturation, general), `reason` (up, down, silent), `dashboard_title`, `panel_title`, `panel_path` (the panel's group or
 section, add-incident-history); per incident `group_key`, `reason` and `resolved_ms` (add-incident-resolution: the reason given
 when closing, and when; state `INCIDENT_STATE_CALM` = all lines normal again, waiting for a reason). Topic `incident-commands`
-carries `ResolveIncident` (command id, incident id, reason of 1–500 characters), read only by the Detector
+carries `ResolveIncident` (command id, incident id, reason of 1–500 characters, and since add-line-reasons the line,
+`series_id`, empty for every line still waiting), read only by the Detector. Each affected line carries `explanation`,
+`explained_ms` and `bau` (add-line-reasons: a person's reason for that line; `reason` on a line is its direction)
 (what the lines have in common, e.g. `api=/v1/invoices`) and `upstream` (the group is a service being called).
 
 <!-- example: incident-event -->

@@ -50,11 +50,17 @@ public final class Detector {
         this.rules = new RuleBook(s, version);
         this.limits = new LineWatch.Limits(s.history().toMillis(), s.minHistory().toMillis(), s.calmPeriod().toMillis());
         book.configure(s.groupBy(), s.upstreamTags(), s.calmPeriod().toMillis());
+        book.setBau(s::isBau);                           // business-as-usual anomalies (add-line-reasons L2)
     }
 
     /** A person's reason closes an incident (add-incident-resolution S3). */
     public List<Change> resolve(String incidentId, String reason, long arrivedMs) {
         return book.resolve(incidentId, reason, arrivedMs);
+    }
+
+    /** A reason for one line ({@code seriesId}), or for every waiting line when blank (add-line-reasons). */
+    public List<Change> resolve(String incidentId, String seriesId, String reason, long arrivedMs) {
+        return book.resolve(incidentId, seriesId, reason, arrivedMs);
     }
 
     /** Open and calm incidents not announced for a while, announced again (S4). */

@@ -44,8 +44,14 @@ public class CommandPublisher implements AutoCloseable {
 
     /** Sends the command and returns its id; throws when Kafka did not take it within 5 seconds. */
     public String resolve(String incidentId, String reason, long nowMs) throws Exception {
+        return resolve(incidentId, "", reason, nowMs);
+    }
+
+    /** A reason for one line ({@code line}, a series id) or, when blank, for every line still waiting (add-line-reasons). */
+    public String resolve(String incidentId, String line, String reason, long nowMs) throws Exception {
         ResolveIncident command = ResolveIncident.newBuilder().setCommandId(UUID.randomUUID().toString())
-                .setIncidentId(incidentId).setReason(reason.strip()).setRequestedMs(nowMs).build();
+                .setIncidentId(incidentId).setSeriesId(line == null ? "" : line.strip()).setReason(reason.strip())
+                .setRequestedMs(nowMs).build();
         sender.send(command);
         return command.getCommandId();
     }

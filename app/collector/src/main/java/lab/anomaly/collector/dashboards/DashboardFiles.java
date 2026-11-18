@@ -49,7 +49,7 @@ public final class DashboardFiles {
     private record Parsed(String sha, Dashboard dashboard) {}
 
     private final Reader reader;
-    private final JsonMapper json = JsonMapper.builder().build();
+    private static final JsonMapper JSON = JsonMapper.builder().build();
     private final Map<String, Parsed> cache = new ConcurrentHashMap<>();
     private final Map<CollectorSettings, Map<String, List<WatchedView>>> accepted =
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -138,19 +138,29 @@ public final class DashboardFiles {
         if (cached != null && cached.sha().equals(sha)) {
             return cached.dashboard();
         }
+        Dashboard dashboard = parseText(file, text);
+        cache.put(file, new Parsed(sha, dashboard));
+        parses.incrementAndGet();
+        return dashboard;
+    }
+
+    /** An exported dashboard's text → the dashboard; IllegalArgumentException naming {@code file} when it is not one. */
+    public static Dashboard parseText(String file, String text) {
         JsonNode root;
         try {
-            root = json.readTree(text);
+            root = JSON.readTree(text);
         } catch (RuntimeException e) {
             throw new IllegalArgumentException(file + ": not valid JSON (" + firstLine(e.getMessage()) + ")");
         }
         if (root == null || !root.isObject() || !root.path("widgets").isArray() || root.path("widgets").isEmpty()) {
             throw new IllegalArgumentException(file + ": no widgets; is this an exported dashboard JSON?");
         }
-        Dashboard dashboard = DatadogDashboardReader.read(root);
-        cache.put(file, new Parsed(sha, dashboard));
-        parses.incrementAndGet();
-        return dashboard;
+        return DatadogDashboardReader.read(root);
+    }
+
+    /** The committed file's text, or null when it is not in the settings repository. */
+    public String read(String file) throws Exception {
+        return reader.read(file);
     }
 
     private final java.util.concurrent.atomic.AtomicLong parses = new java.util.concurrent.atomic.AtomicLong();

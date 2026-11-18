@@ -314,9 +314,7 @@ public record CollectorSettings(
             if (keys.isPresent()) {
                 return keys;
             }
-            if (s.dashboards().isEmpty() && !"replay".equals(settings.source())) {
-                return Optional.of(where + "list at least one dashboard file");
-            }
+            // a region without dashboards is allowed (add-settings-page): it is added first, its dashboards next; its lane waits
             Optional<String> refs = checkRefs("sources[" + i + "] (" + s.name() + "): dashboards", s.dashboards(),
                     "replay".equals(settings.source()));
             if (refs.isPresent()) {

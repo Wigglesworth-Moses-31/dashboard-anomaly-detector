@@ -13,7 +13,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The page's "Close with reason" (add-incident-resolution S3): POST /incidents/{id}/reason {"reason": "..."} → 202 with
+ * The page's reasons (add-incident-resolution S3, add-line-reasons L4): POST /incidents/{id}/reason
+ * {"reason": "...", "line": "<series id>"} → 202 with the command id; no "line" means every line still waiting. The
+ * incident changes when the Detector's event arrives on the page. 400 for an empty or too long reason or a bad line id,
+ * 503 when Kafka did not take the command. Before: "Close with reason" → 202 with
  * the command id; the incident closes when the Detector's closing event arrives on the page. 400 for an empty or too
  * long reason, 503 when Kafka did not take the command.
  */
@@ -39,9 +42,13 @@ class ReasonController {
         if (reason.isEmpty() || reason.length() > ContractChecks.MAX_REASON) {
             return ResponseEntity.badRequest().body(Map.of("problem", "a reason of 1 to " + ContractChecks.MAX_REASON + " characters is needed"));
         }
+        String line = body.get("line") == null ? "" : body.get("line").strip();
+        if (line.length() > 64 || !line.matches("[0-9a-zA-Z_-]*")) {
+            return ResponseEntity.badRequest().body(Map.of("problem", "line must be a series id"));
+        }
         try {
-            String commandId = commands.resolve(id, reason, System.currentTimeMillis());
-            log.info("Close command {} for incident {} sent", commandId, id);
+            String commandId = commands.resolve(id, line, reason, System.currentTimeMillis());
+            log.info("Reason command {} for incident {} ({}) sent", commandId, id, line.isEmpty() ? "every waiting line" : "line " + line);
             return ResponseEntity.accepted().body(Map.of("command_id", commandId));
         } catch (Exception e) {
             log.warn("Close command for incident {} not sent: {}", id, e.toString());

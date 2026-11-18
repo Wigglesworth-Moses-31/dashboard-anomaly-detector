@@ -215,9 +215,9 @@ public class DetectorEngine {
                     log.warn("Close command {} set aside: {}", cmd.getCommandId(), problems);
                     continue;
                 }
-                List<Change> closed = detector.resolve(cmd.getIncidentId(), cmd.getReason(), readMs);
+                List<Change> closed = detector.resolve(cmd.getIncidentId(), cmd.getSeriesId(), cmd.getReason(), readMs);
                 log.info("Close command {} for incident {}: {}", cmd.getCommandId(), cmd.getIncidentId(),
-                        closed.isEmpty() ? "nothing to close (unknown or already closed)" : "closed with its reason");
+                        closed.isEmpty() ? "nothing changed (unknown, already closed or already explained)" : "reason applied");
                 changes.addAll(closed);
             } catch (Exception e) {
                 stats.messagesSetAside.incrementAndGet();

@@ -37,6 +37,37 @@ public final class DatadogCredentials {
         return credentials;
     }
 
+    /**
+     * Reads the two keys from {@code .env} (add-settings-page S4) and, for a key the file does not have, from the
+     * environment (tests, CI). Only presence is logged.
+     */
+    public static DatadogCredentials from(java.util.Optional<lab.anomaly.collector.keys.EnvFile> file, Environment environment,
+                                          String apiKeyName, String appKeyName, String source) {
+        String api = file.flatMap(f -> f.get(apiKeyName)).orElseGet(() -> environment.getProperty(apiKeyName));
+        String app = file.flatMap(f -> f.get(appKeyName)).orElseGet(() -> environment.getProperty(appKeyName));
+        DatadogCredentials credentials = new DatadogCredentials(api, app);
+        log.info("Datadog keys of source '{}' ({}, {}): {}", source, apiKeyName, appKeyName, credentials);
+        return credentials;
+    }
+
+    /** Keys only, for tests and the key check; never logged. */
+    public static DatadogCredentials of(String apiKey, String applicationKey) {
+        return new DatadogCredentials(apiKey, applicationKey);
+    }
+
+    /** True when both keys are the same values (a lane with new keys is rebuilt). Constant-time per key. */
+    public boolean sameKeys(DatadogCredentials other) {
+        return other != null && same(apiKey, other.apiKey) && same(applicationKey, other.applicationKey);
+    }
+
+    private static boolean same(String a, String b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return java.security.MessageDigest.isEqual(a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     /** What is missing, for health: "" when complete, else "API key", "application key" or "both". */
     public String missing() {
         if (apiKey == null && applicationKey == null) {

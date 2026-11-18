@@ -5,21 +5,8 @@ anomaly:
   collector:
     source: datadog                           # datadog | replay
     replay-dir: recordings/my-run             # only for source: replay (a folder written by recording)
-    # The Datadog accounts to watch, one entry per site, all collected at the same time, each in its own lane (its
-    # own rate limit, 429 wait, calls in flight and breakers). Keys are given by the NAME of the variable in .env,
-    # never by value; only DD_<NAME>_API_KEY / DD_<NAME>_APP_KEY names are accepted.
-    sources:
-__SOURCES__
-    #  - name: eu                             #   example: a second region (add its keys to .env, restart the Collector)
-    #    site: datadoghq.eu                   #   datadoghq.com (US1), datadoghq.eu, us3/us5/ap1/ap2.datadoghq.com, ddog-gov.com
-    #    api-key-env: DD_EU_API_KEY
-    #    app-key-env: DD_EU_APP_KEY
-    #    dashboards:                          #   exported JSON files in config-repo/dashboards/<source>/
-    #      - file: dashboards/eu/shop.json    #   Datadog: dashboard > Share > Export dashboard JSON
-    #        id: stu-vwx-yz1                  #   optional: for links, when the file has no id (from its URL)
-    #        presets: all                     #   optional: every saved view, each as its own view; or [Name1, Name2]
-    #        filters: { env: prod }           #   optional: wins over the file's default for that variable
-    #    max-concurrent-requests: 4           #   optional, else the shared value below
+    # The Datadog regions to watch (at most two: us, eu) and their dashboards are in regions.yml, written by the
+    # Settings tab of the live page (or by hand). Every other Collector setting is here.
     poll-interval: 15s                        # how often to ask for new data
     step: 10s                                 # size of each data step (highest value per step)
     backfill: 10m                             # how much history to fetch at start

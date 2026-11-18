@@ -329,22 +329,45 @@ Each affected line of an incident SHALL carry the group of the panel it comes fr
 - **THEN** the incident's entry for that line says group "API Gateway Metrics" and panel "Request Counts by Status Code"
 
 ### Requirement: Only a reason closes an incident
-An incident SHALL close only when a reason of 1 to 500 characters is given for it, whether it is open or calm. The
-reason and the time it was given SHALL be saved with the incident and announced in its closing event, together. A
-later spike of the same group SHALL open a new incident. An empty or too long reason, or a reason for an incident that
-is unknown or already closed, SHALL change nothing.
+Each line that is not BAU SHALL need its own reason (1 to 500 characters), given for one line or for every waiting
+line, saved and announced with its time. The incident SHALL close when it is calm and every such line has a reason,
+or at once when one reason is given for every waiting line of an open incident. A reasoned line that spikes again
+SHALL need a new one. A bad reason, or one for an unknown or closed incident, SHALL change nothing.
 
 #### Scenario: Reason for a calm incident
-- **WHEN** the reason "certificate renewal on the gateway" is given for a calm incident
-- **THEN** it is closed, its reason is stored and announced, and the next spike of its group opens a new incident
+- **WHEN** the reason "certificate renewal on the gateway" is given for every line of a calm incident
+- **THEN** it is closed, the reason is stored and announced on its lines, and the next spike of its group opens a new incident
 
 #### Scenario: Reason for an open incident
-- **WHEN** the reason "test environment switched off" is given for an incident open for two days
-- **THEN** it is closed at once
+- **WHEN** the reason "test environment switched off" is given for every line of an incident open for two days
+- **THEN** its lines carry the reason and it closes at once
 
 #### Scenario: Empty reason
 - **WHEN** an empty reason is given
-- **THEN** the incident is not closed
+- **THEN** nothing changes
+
+#### Scenario: One line of several
+- **GIVEN** a calm incident with the lines `status_code=404` (errors up) and `status_code=500` (errors up)
+- **WHEN** a reason is given for the 404 line only
+- **THEN** the incident stays calm, waiting for the 500 line's reason
+
+#### Scenario: The line spikes again
+- **GIVEN** an open incident whose 404 line already has a reason
+- **WHEN** that line calms and spikes again before the incident is calm
+- **THEN** its reason is cleared and it needs a new one
+
+### Requirement: A closed incident's reason summarises its lines
+When an incident closes, its own reason SHALL be the one reason when all its lines that are not BAU have the same
+reason, "n reasons" when they differ, and "BAU" when none needed one. A later spike of the same group SHALL open a
+new incident.
+
+#### Scenario: Two different reasons
+- **WHEN** the 404 line's reason is "bad deploy" and the 500 line's is "slow database", and the incident closes
+- **THEN** its reason is "2 reasons" and each line keeps its own
+
+#### Scenario: All the same
+- **WHEN** "Same reason for all" is used with "gateway restart"
+- **THEN** the incident's reason is "gateway restart"
 
 ### Requirement: Waiting incidents stay visible
 Open and calm incidents SHALL be announced again at least every 12 hours, so readers that rebuild from the last 2 days
@@ -354,3 +377,26 @@ of events still know them.
 - **GIVEN** an incident calm for 3 days without a reason
 - **WHEN** the Notifier is restarted
 - **THEN** the incident is on the page under "Needs a reason"
+
+### Requirement: Business-as-usual lines need no reason
+Lines whose anomaly is in the BAU list from the settings (default: signal "general" in any direction including
+silence, and signal "errors" going down) SHALL be marked BAU when they join an incident, recorded with the reason
+"BAU (business as usual)", and SHALL never keep an incident waiting. An incident made only of BAU lines SHALL close by
+itself when calm, with the reason "BAU". The list SHALL change without a restart.
+
+#### Scenario: Mixed incident
+- **GIVEN** an incident with 404 errors up, three partners silent and two partners "general up"
+- **WHEN** it is calm and the 404 line has a reason
+- **THEN** it closes; the five other lines read "BAU (business as usual)"
+
+#### Scenario: Only BAU
+- **WHEN** an incident of only "general up" lines becomes calm
+- **THEN** it closes by itself with the reason "BAU"
+
+#### Scenario: Errors down
+- **WHEN** an error count line is judged down
+- **THEN** it is BAU
+
+#### Scenario: Setting changed
+- **WHEN** "general" is removed from the BAU list and committed
+- **THEN** new "general" lines need a reason, without a restart

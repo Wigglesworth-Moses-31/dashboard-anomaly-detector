@@ -432,7 +432,7 @@ class MultiSiteTest {
 
     @Test
     void theTemplateFilledBySetupIsValid(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
-        String template = Files.readString(Path.of("../../config-template/collector.yml"));
+        String template = Files.readString(Path.of("../../config-template/regions.yml"));
         String block = """
                       - name: us
                         site: datadoghq.com
@@ -447,9 +447,9 @@ class MultiSiteTest {
                         dashboards:
                           - file: dashboards/eu/shop.json
                             presets: all""";
-        Path yml = dir.resolve("collector.yml");
-        Files.writeString(yml, template.replace("__SOURCES__", block.indent(6).stripTrailing()));   // as setup.sh writes it
-        CollectorSettings s = ReplayComparison.settings(yml);
+        Files.writeString(dir.resolve("regions.yml"), template.replace("__SOURCES__", block.indent(6).stripTrailing()));   // as setup.sh writes it
+        Files.copy(Path.of("../../config-template/collector.yml"), dir.resolve("collector.yml"));
+        CollectorSettings s = lab.anomaly.collector.check.CheckDashboards.read(dir);
         java.lang.reflect.Method validators = CollectorSettings.class.getDeclaredMethod("validators");
         validators.setAccessible(true);
         @SuppressWarnings("unchecked")
@@ -482,5 +482,77 @@ class MultiSiteTest {
         assertThat(engine.lane("eu").nextDiscoveryMs - engine.lane("eu").lastDiscoveryMs)
                 .isLessThanOrEqualTo(CollectorEngine.UNREADABLE_RETRY_MS);
         assertThat(engine.lane("us").nextDiscoveryMs - engine.lane("us").lastDiscoveryMs).isGreaterThan(CollectorEngine.UNREADABLE_RETRY_MS);
+    }
+
+    // ---- add-settings-page 1.1: regions.yml is read with collector.yml and wins ----------------------------------
+
+    @Test
+    void regionsYmlWinsAndCollectorYmlAloneStillLoads(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Files.copy(Path.of("../../config-template/collector.yml"), dir.resolve("collector.yml"));
+        CollectorSettings alone = lab.anomaly.collector.check.CheckDashboards.read(dir);
+        assertThat(alone.sources()).isEmpty();
+        assertThat(alone.pollInterval()).isEqualTo(java.time.Duration.ofSeconds(15));
+        Files.writeString(dir.resolve("collector.yml"), Files.readString(dir.resolve("collector.yml")).replace(
+                "    poll-interval: 15s", """
+                    sources:
+                      - { name: us, site: datadoghq.com, api-key-env: DD_US_API_KEY, app-key-env: DD_US_APP_KEY }
+                    poll-interval: 15s""".indent(4).stripTrailing()));
+        Files.writeString(dir.resolve("regions.yml"), """
+                anomaly:
+                  collector:
+                    sources:
+                      - { name: eu, site: datadoghq.eu, api-key-env: DD_EU_API_KEY, app-key-env: DD_EU_APP_KEY }
+                """);
+        CollectorSettings both = lab.anomaly.collector.check.CheckDashboards.read(dir);
+        assertThat(both.sources()).extracting(CollectorSettings.Source::name).containsExactly("eu");
+        assertThat(both.pollInterval()).isEqualTo(java.time.Duration.ofSeconds(15));
+    }
+
+    // ---- add-settings-page 1.2: keys from .env on every reload ---------------------------------------------------
+
+    @Test
+    void newKeysInEnvFileRestartOnlyThatLaneAndAreNeverLogged(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        String usKey = "us0000000000000000000000000000aa", euOld = "eu0000000000000000000000000000bb", euNew = "eu1111111111111111111111111111cc";
+        Path file = dir.resolve(".env");
+        Files.writeString(file, "# lab\nPLATFORM_DB_PASSWORD=not-read\n");
+        lab.anomaly.collector.keys.EnvFile envFile = new lab.anomaly.collector.keys.EnvFile(file);
+        envFile.write(Map.of("DD_US_API_KEY", usKey, "DD_US_APP_KEY", usKey, "DD_EU_API_KEY", euOld, "DD_EU_APP_KEY", euOld));
+        ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        root.addAppender(logs);
+        try {
+            MockEnvironment empty = new MockEnvironment();                    // nothing in the environment: .env only
+            current.set(settings(source("us", "datadoghq.com", "d1"), source("eu", "datadoghq.eu", "d2")));
+            engine = new CollectorEngine(current::get, version::get,
+                    c -> DatadogCredentials.from(java.util.Optional.of(envFile), empty, c.apiKeyEnv(), c.appKeyEnv(), c.name()),
+                    (c, credentials, clock) -> sites.computeIfAbsent(c.site(), site -> new StubSite(site, 3)),
+                    null, Clock.systemUTC());
+            engine.startLive(new MessageSink() {
+                @Override public void send(SeriesDescriptor d) { }
+                @Override public void send(MetricPoints p) { }
+            });
+            waitUntil(() -> engine.lane("us") != null && engine.lane("eu") != null && engine.lane("eu").ready(), 3000);
+            Lane us = engine.lane("us"), eu = engine.lane("eu");
+
+            engine.keysChanged();                                             // nothing changed in the file: both kept
+            Thread.sleep(3 * INTERVAL_MS);
+            assertThat(engine.lane("eu")).isSameAs(eu);
+
+            envFile.write(Map.of("DD_EU_API_KEY", euNew, "DD_EU_APP_KEY", euNew));
+            engine.keysChanged();
+            waitUntil(() -> engine.lane("eu") != eu && engine.lane("eu") != null, 3000);
+            assertThat(engine.lane("us")).as("US keeps its lane").isSameAs(us);
+            assertThat(Files.readString(file)).contains("# lab", "PLATFORM_DB_PASSWORD=not-read", "DD_EU_APP_KEY=" + euNew)
+                    .doesNotContain(euOld);
+            assertThat(java.nio.file.Files.getPosixFilePermissions(file)).containsExactlyInAnyOrder(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ, java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
+        } finally {
+            root.detachAppender(logs);
+        }
+        assertThat(logs.list).isNotEmpty().allSatisfy(e -> assertThat(e.getFormattedMessage())
+                .doesNotContain(usKey).doesNotContain(euOld).doesNotContain(euNew));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> envFile.get("PLATFORM_DB_PASSWORD"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

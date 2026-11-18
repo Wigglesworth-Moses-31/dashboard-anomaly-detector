@@ -1,6 +1,7 @@
 # The Config Service's own settings stay local: it cannot fetch them from itself.
 server:
   port: 8888
+  address: 127.0.0.1                 # this machine only: it changes settings for the page (add-settings-page S6)
 
 spring:
   application:

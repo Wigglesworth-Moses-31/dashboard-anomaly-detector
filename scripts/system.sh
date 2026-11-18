@@ -28,13 +28,9 @@ start_service() {  # name port [with-datadog-keys]
     ( export PLATFORM_DB_PASSWORD="$(grep -E '^PLATFORM_DB_PASSWORD=' "$ROOT/.env" | cut -d= -f2-)"
       exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   elif [ "${3:-}" = "with-datadog-keys" ]; then
-    # Only Datadog keys (DD_API_KEY, DD_APP_KEY, DD_<NAME>_API_KEY, DD_<NAME>_APP_KEY) from .env into this one
-    # process, with shell builtins only (never on a command line, never echoed); never the database password
-    ( while IFS= read -r line || [ -n "$line" ]; do
-        key="${line%%=*}"
-        if [[ "$key" =~ ^DD_([A-Z0-9]+_)?(API|APP)_KEY$ ]]; then export "$key=${line#*=}"; fi
-      done < "$ROOT/.env"
-      unset line key
+    # The Collector reads its Datadog keys itself from .env on every settings reload (add-settings-page S4): only
+    # the file's path is passed, never a key; it reads Datadog key names only, never the database password
+    ( export LAB_ENV_FILE="$ROOT/.env"
       exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   else
     java -Xmx256m -jar "$jar" > "$RUN/$name.log" 2>&1 &

@@ -28,7 +28,31 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
                                double silenceMinPresence, List<String> silenceSkipSignals, List<String> groupBy,
                                List<String> upstreamTags,
                                Duration incidentRetention, String storeAddress, List<RuleSettings> rules,
-                               GeneralSettings general) {
+                               GeneralSettings general, List<BauSettings> bau) {
+
+    /**
+     * Anomalies that are business as usual (add-line-reasons L2): a line whose signal (and, if given, direction: up,
+     * down or silent) matches needs no reason. Missing setting: "general" in any direction, and errors going down.
+     */
+    public record BauSettings(String signal, String direction) {
+        public boolean matches(String lineSignal, String lineDirection) {
+            return signal != null && signal.equalsIgnoreCase(lineSignal)
+                    && (direction == null || direction.isBlank() || direction.equalsIgnoreCase(lineDirection));
+        }
+    }
+
+    public static final List<BauSettings> DEFAULT_BAU = List.of(new BauSettings("general", null), new BauSettings("errors", "down"));
+    static final Set<String> BAU_DIRECTIONS = Set.of("up", "down", "silent");
+
+    /** True when this line's anomaly is business as usual. O(entries). */
+    public boolean isBau(String signal, String direction) {
+        for (BauSettings b : bau) {
+            if (b.matches(signal, direction)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public static final Duration MAX_HISTORY = Duration.ofDays(2);
     public static final Duration MAX_RETENTION = Duration.ofDays(7);
@@ -39,6 +63,7 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
         groupBy = groupBy == null ? List.of() : List.copyOf(groupBy);
         upstreamTags = upstreamTags == null ? List.of() : List.copyOf(upstreamTags);
         rules = rules == null ? List.of() : List.copyOf(rules);
+        bau = bau == null ? DEFAULT_BAU : List.copyOf(bau);
     }
 
     /**
@@ -77,6 +102,9 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
 
     static List<SettingsValidator<? super DetectorSettings>> validators() {
         return List.of(
+                SettingsValidator.require("bau", s -> s.bau().stream().allMatch(b -> b.signal() != null && !b.signal().isBlank()
+                        && (b.direction() == null || b.direction().isBlank() || BAU_DIRECTIONS.contains(b.direction().toLowerCase(java.util.Locale.ROOT)))),
+                        "each entry needs a signal, and a direction of up, down or silent when given"),
                 SettingsValidator.positive("history", DetectorSettings::history),
                 SettingsValidator.require("history", s -> s.history() == null || s.history().compareTo(MAX_HISTORY) <= 0,
                         "at most 2 days: the Store keeps no more (lab limit)"),

@@ -89,6 +89,9 @@ public class CollectorHealthIndicator implements HealthIndicator {
             warnings.add(lane.name() + ": keys missing: " + missing + " (" + lane.config().apiKeyEnv() + ", "
                     + lane.config().appKeyEnv() + "); nothing is collected from this source");
         }
+        if (lane.config().dashboards().isEmpty()) {
+            warnings.add(lane.name() + ": no dashboards yet; add one in the Settings tab");
+        }
         double base = engine.pollIntervalSeconds();
         double every = lane.effectiveIntervalMs() / 1000.0;
         if (every > base + 0.001) {

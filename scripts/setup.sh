@@ -93,7 +93,7 @@ print("ok\t%s\t%d\t%s" % (d.get("title", "?"), len(d.get("template_variable_pres
 PY2
   }
 
-  ENTRIES=()          # per source: the dashboards block for collector.yml
+  ENTRIES=()          # per source: the dashboards block for regions.yml
   COPIES=()           # "source path<TAB>dest name" lines to copy into config-repo/dashboards/<source>/
 
   add_source() {  # name site file... (keys already in .env)
@@ -194,7 +194,7 @@ PY2
   python3 -I - "$ROOT/config-repo" "$zone" "$BLOCK" <<'PY'
 import pathlib, sys
 repo, zone, block = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3].replace("\\n", "\n").rstrip("\n")
-for name, old, new in [("collector.yml", "__SOURCES__", block), ("application.yml", "__TIME_ZONE__", zone)]:
+for name, old, new in [("regions.yml", "__SOURCES__", block), ("application.yml", "__TIME_ZONE__", zone)]:
     f = repo / name
     f.write_text(f.read_text().replace(old, new))
 PY

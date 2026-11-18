@@ -6,17 +6,22 @@
   <title>Live incidents</title>
   <link rel="stylesheet" href="app.css">
   <script type="module" src="app.js"></script>
+  <script type="module" src="settings.js"></script>
 </head>
 <body>
   <header class="top">
     <div class="brand"><span class="dot-logo"></span>Live incidents</div>
+    <nav class="tabs" aria-label="Views">
+      <a href="#" id="tabIncidents" class="tab active">Incidents</a>
+      <a href="#settings" id="tabSettings" class="tab">Settings</a>
+    </nav>
     <div class="conn" id="conn"><span class="pill" id="connPill">connecting</span><span id="lastChange" class="muted"></span></div>
     <div class="toggles">
       <button id="notifyBtn" class="toggle" title="Desktop notification when a new incident opens">🔔 off</button>
       <button id="soundBtn" class="toggle" title="Short sound when a new incident opens">🔊 off</button>
     </div>
   </header>
-  <main>
+  <main id="incidentsView">
     <section class="day">
       <div class="day-title" id="dayTitle">Today</div>
       <div class="cards">
@@ -43,6 +48,16 @@
       </div>
       <div id="groups" class="groups"></div>
       <div id="closedList" class="list closed-list"></div>
+    </section>
+  </main>
+  <main id="settingsView" hidden>
+    <section>
+      <h2>Regions <span class="count" id="sCount"></span></h2>
+      <p class="muted">Datadog regions to watch (at most two: US and EU) and their dashboards. Every change is one commit in
+        <code>config-repo</code>; keys go only to <code>.env</code> on this machine and are never shown again.</p>
+      <div id="sNotice" class="s-notice" hidden></div>
+      <div id="sRegions" class="list"></div>
+      <div id="sAdd"></div>
     </section>
   </main>
 </body>

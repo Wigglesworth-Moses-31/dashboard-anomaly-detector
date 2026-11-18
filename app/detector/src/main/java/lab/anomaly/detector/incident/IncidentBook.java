@@ -46,6 +46,14 @@ public final class IncidentBook {
         this.ids = ids;
     }
 
+    /** Which anomalies are business as usual: (signal, direction) → BAU (add-line-reasons L2). */
+    private java.util.function.BiPredicate<String, String> bau = (signal, direction) -> false;
+    public static final String BAU_TEXT = "BAU (business as usual)";
+
+    public void setBau(java.util.function.BiPredicate<String, String> isBau) {
+        this.bau = isBau;
+    }
+
     public void configure(List<String> groupByTags, Collection<String> upstream, long calmPeriodMs) {
         this.calmMs = calmPeriodMs;
         this.groupBy = List.copyOf(groupByTags);
@@ -130,9 +138,11 @@ public final class IncidentBook {
             open.members.put(line.facts().seriesId(), m);
             open.addLink(line.facts());
         }
+        boolean wasCalmBefore = m.calmed;
         m.calmed = false;
         m.signal = line.rule().signal();
         m.reason = line.reason();
+        markBau(m, newMember || wasCalmBefore);
         m.normal = line.normalAtSpike();
         m.peak = line.peak();
         m.peakTs = line.peakTs();
@@ -154,6 +164,7 @@ public final class IncidentBook {
         boolean wasCalm = m.calmed;
         m.calmed = false;
         m.reason = line.reason();
+        markBau(m, wasCalm);
         m.peak = line.peak();
         m.peakTs = line.peakTs();
         if (wasCalm) {
@@ -202,37 +213,51 @@ public final class IncidentBook {
         open.endedMs = ended;
         byGroup.remove(open.group.key());
         open.members.keySet().forEach(bySeries::remove);
+        if (allExplained(open)) {                               // every line BAU or explained: closes (L3)
+            return closeNow(open, arrivedMs);
+        }
         // Calm, not closed: it waits for a reason (add-incident-resolution S2)
         open.state = IncidentState.INCIDENT_STATE_CALM;
         calm.put(open.group.key(), open);
         return List.of(open.change(EventType.EVENT_TYPE_UPDATED, line.lastTs(), arrivedMs));
     }
 
-    // ---- closing by a reason (add-incident-resolution S3) -------------------------------------------------------
-
     /**
-     * Closes an open or calm incident with a person's reason (1 to 500 characters). Unknown, already closed and
-     * invalid requests change nothing, so a repeated command is harmless. O(incidents waiting) to find it.
+     * A line becomes BAU when its signal and direction are in the BAU list; a line that is not BAU and spikes anew loses
+     * an earlier explanation (it needs a new one). O(BAU entries).
      */
-    public List<Change> resolve(String incidentId, String reason, long arrivedMs) {
-        String why = reason == null ? "" : reason.strip();
-        if (why.isEmpty() || why.length() > lab.anomaly.contracts.ContractChecks.MAX_REASON) {
-            return List.of();
+    private void markBau(Member m, boolean newSpike) {
+        boolean isBau = bau.test(m.signal, m.reason);
+        if (isBau) {
+            m.bau = true;
+            if (m.explanation.isEmpty()) {
+                m.explanation = BAU_TEXT;
+            }
+        } else {
+            if (m.bau || newSpike) {
+                m.explanation = "";
+                m.explainedMs = 0;
+            }
+            m.bau = false;
         }
-        Open target = null;
-        for (Open o : byGroup.values()) {
-            if (o.id.equals(incidentId)) {
-                target = o;
+    }
+
+    private static boolean allExplained(Open open) {
+        for (Member m : open.members.values()) {
+            if (!m.bau && m.explanation.isEmpty()) {
+                return false;
             }
         }
-        for (Open o : calm.values()) {
-            if (o.id.equals(incidentId)) {
-                target = o;
-            }
-        }
-        if (target == null) {
-            return List.of();
-        }
+        return true;
+    }
+
+    /** "BAU" when no line needed a reason, the one reason when all agree, else "n reasons". O(lines). */
+    static String summary(Collection<String> explanations) {
+        java.util.Set<String> distinct = new java.util.LinkedHashSet<>(explanations);
+        return distinct.isEmpty() ? "BAU" : distinct.size() == 1 ? distinct.iterator().next() : distinct.size() + " reasons";
+    }
+
+    private List<Change> closeNow(Open target, long arrivedMs) {
         byGroup.remove(target.group.key(), target);
         calm.remove(target.group.key(), target);
         for (String id : target.members.keySet()) {
@@ -244,9 +269,59 @@ public final class IncidentBook {
             target.endedMs = target.lastUpdateTs;          // closed while open: it ends at its latest data
         }
         target.state = IncidentState.INCIDENT_STATE_CLOSED;
-        target.reason = why;
+        target.reason = summary(target.members.values().stream().filter(m -> !m.bau).map(m -> m.explanation).toList());
         target.resolvedMs = arrivedMs;
         return List.of(target.change(EventType.EVENT_TYPE_CLOSED, target.endedMs, arrivedMs));
+    }
+
+    // ---- closing by a reason (add-incident-resolution S3) -------------------------------------------------------
+
+    /**
+     * Closes an open or calm incident with a person's reason (1 to 500 characters). Unknown, already closed and
+     * invalid requests change nothing, so a repeated command is harmless. O(incidents waiting) to find it.
+     */
+    public List<Change> resolve(String incidentId, String reason, long arrivedMs) {
+        return resolve(incidentId, "", reason, arrivedMs);
+    }
+
+    /**
+     * A person's reason for one line ({@code seriesId}) or, when blank, for every line still waiting (add-line-reasons
+     * L3). The incident closes when it is calm and every line that is not BAU has a reason, or at once when one reason
+     * was given for all waiting lines of an open incident (lines whose data stopped never become calm). Unknown,
+     * closed, BAU-only targets and invalid text change nothing. O(lines).
+     */
+    public List<Change> resolve(String incidentId, String seriesId, String reason, long arrivedMs) {
+        String why = reason == null ? "" : reason.strip();
+        if (why.isEmpty() || why.length() > lab.anomaly.contracts.ContractChecks.MAX_REASON) {
+            return List.of();
+        }
+        Open target = null;
+        for (Open o : waiting()) {
+            if (o.id.equals(incidentId)) {
+                target = o;
+            }
+        }
+        if (target == null) {
+            return List.of();
+        }
+        boolean all = seriesId == null || seriesId.isBlank();
+        int changed = 0;
+        for (Member m : target.members.values()) {
+            if (m.bau || (all ? !m.explanation.isEmpty() : !m.seriesId.equals(seriesId))) {
+                continue;
+            }
+            m.explanation = why;
+            m.explainedMs = arrivedMs;
+            changed++;
+        }
+        if (changed == 0 && !(all && allExplained(target))) {
+            return List.of();
+        }
+        if (allExplained(target) && (target.state == IncidentState.INCIDENT_STATE_CALM || all)) {
+            return closeNow(target, arrivedMs);
+        }
+        return List.of(target.change(EventType.EVENT_TYPE_UPDATED,
+                target.state == IncidentState.INCIDENT_STATE_OPEN ? target.lastUpdateTs : target.endedMs, arrivedMs));
     }
 
     /** Open and calm incidents not announced for {@code everyMs} are announced again (S4). O(waiting). */
@@ -352,6 +427,9 @@ public final class IncidentBook {
         long peakTs;
         boolean calmed;
         long calmSince;
+        String explanation = "";                                        // a person's reason for this line (L1)
+        long explainedMs;
+        boolean bau;
 
         Member(LineFacts f) {
             seriesId = f.seriesId();
@@ -377,13 +455,17 @@ public final class IncidentBook {
             peak = s.getPeakValue();
             announcedPeak = peak;
             peakTs = s.getPeakTsMs();
+            explanation = s.getExplanation();
+            explainedMs = s.getExplainedMs();
+            bau = s.getBau();
         }
 
         AffectedSeries toProto() {
             return AffectedSeries.newBuilder().setSeriesId(seriesId).setMetric(metric).putAllGroupTags(tags)
                     .setPeakValue(Double.isNaN(peak) ? 0 : peak).setPeakTsMs(peakTs)
                     .setNormalValue(Double.isNaN(normal) ? 0 : normal).setUnit(unit).setSignal(signal).setReason(reason)
-                    .setDashboardTitle(dashboardTitle).setPanelTitle(panelTitle).setPanelPath(panelPath).build();
+                    .setDashboardTitle(dashboardTitle).setPanelTitle(panelTitle).setPanelPath(panelPath)
+                    .setExplanation(explanation).setExplainedMs(explainedMs).setBau(bau).build();
         }
     }
 

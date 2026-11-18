@@ -8,7 +8,7 @@ checked before anything is saved, each change one commit in the settings reposit
 ## ADDED Requirements
 
 ### Requirement: Regions and dashboards are listed
-The Settings tab SHALL list the fixed regions (name, site, whether both keys are present, never the keys) and, per
+The Settings tab SHALL list the regions (name, site, whether both keys are present, never the keys) and, per
 region, its dashboards: title, file, id, watched saved views (all, the named ones, or none), number of panels and of
 saved views.
 
@@ -68,6 +68,21 @@ without a restart.
 - **WHEN** the watched saved views are changed from "all" to "Payments, Billing"
 - **THEN** one commit changes the entry, and only those two views are collected
 
+### Requirement: A dashboard's JSON can be edited in the page
+Edit SHALL open the committed JSON of a dashboard, as it is, in a text editor in the page with line numbers. While
+typing, a JSON mistake SHALL be shown with its line and column, and Save SHALL be off until the text is valid JSON.
+Check SHALL read the edited text with the Collector's code and show the panels and saved views added or removed. Save
+SHALL replace the file as one commit, with the same checks as Update; the dashboard's entry (watched views, filters)
+SHALL stay as it was.
+
+#### Scenario: Rename a panel
+- **WHEN** a panel's title is changed in the editor, checked and saved
+- **THEN** the check shows one panel added and one removed, and one commit "settings page: edit us/shop.json" holds the edited file
+
+#### Scenario: A JSON mistake
+- **WHEN** a comma is deleted in the editor
+- **THEN** the line and column of the mistake are shown and Save is off until it is fixed
+
 ### Requirement: A dashboard can be deleted
 After a confirmation, deleting a dashboard SHALL remove its file and its entry in one commit; its lines SHALL stop
 being collected within one poll interval.
@@ -85,9 +100,47 @@ saying so; files the change does not touch SHALL not be committed with it.
 - **WHEN** a dashboard is added from the page
 - **THEN** it is refused with "collector.yml has uncommitted changes: commit or discard them first"
 
-### Requirement: Regions are fixed
-The page SHALL NOT add or remove regions or accept keys; regions come from setup.
+### Requirement: A region can be added with its keys
+While fewer than two regions exist, the page SHALL let the user add US (`datadoghq.com`) or EU (`datadoghq.eu`) with
+its API key and application key. The keys SHALL be checked with Datadog by read-only calls first; when valid, they
+SHALL be written only to `.env` on this machine and the region's entry (naming the key variables, never the keys) to
+`collector.yml` as one commit. The Collector SHALL start collecting the region without a restart.
 
-#### Scenario: No region form
-- **WHEN** the Settings tab is shown
-- **THEN** it offers no way to add or remove a region or type a key
+#### Scenario: Add EU
+- **GIVEN** only US exists
+- **WHEN** EU is added with valid keys
+- **THEN** `.env` holds the EU keys, `collector.yml` has one new commit with the EU entry and no key, and EU is collected within one poll without a restart
+
+#### Scenario: Wrong keys
+- **WHEN** EU is added with an application key Datadog refuses
+- **THEN** "Datadog refused the application key" is shown and nothing is written
+
+#### Scenario: At most two
+- **GIVEN** US and EU exist
+- **WHEN** a third region is requested
+- **THEN** the page offers no "Add region" and the settings API refuses it
+
+### Requirement: A region's keys can be replaced
+The page SHALL let the user type new keys for a region; they SHALL be checked the same way and only `.env` SHALL
+change; the Collector SHALL use them without a restart.
+
+#### Scenario: New keys
+- **WHEN** valid new keys are saved for US
+- **THEN** `.env` has the new keys, no commit is made, and the next poll uses them
+
+### Requirement: A region can be removed
+After a confirmation naming its dashboards, removing a region SHALL remove its entry and its dashboard files in one
+commit and its keys from `.env`; its collection SHALL stop within one poll. Its incidents and data SHALL stay until
+they age out.
+
+#### Scenario: Remove EU
+- **WHEN** EU, with one dashboard, is removed and confirmed
+- **THEN** one commit removes its entry and file, `.env` no longer has the EU keys, and EU is no longer polled
+
+### Requirement: Keys are never shown or stored elsewhere
+A key SHALL be sent once from its field to `.env`. No page, answer, log line, error message or commit SHALL contain a
+key or part of one; the page SHALL show only whether keys are present and valid.
+
+#### Scenario: Looking for a key afterwards
+- **WHEN** a region was added and the logs, the settings repository history and every page answer are searched for its keys
+- **THEN** nothing is found

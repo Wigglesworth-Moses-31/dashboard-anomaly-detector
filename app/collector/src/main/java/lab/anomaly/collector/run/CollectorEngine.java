@@ -120,7 +120,8 @@ public class CollectorEngine {
     public CollectorEngine(SettingsHolder<CollectorSettings> settings, Environment environment,
                            lab.anomaly.collector.dashboards.DashboardFiles files) {
         this(settings::get, () -> settings.snapshot().version(),
-                config -> DatadogCredentials.fromEnvironment(environment, config.apiKeyEnv(), config.appKeyEnv(), config.name()),
+                config -> DatadogCredentials.from(lab.anomaly.collector.keys.EnvFile.fromEnvironment(environment), environment,
+                        config.apiKeyEnv(), config.appKeyEnv(), config.name()),
                 (config, credentials, clock) -> new DatadogSource(config.site(), credentials, clock),
                 environment, Clock.systemUTC(), (lane, s) -> files.views(s, lane.name()));
     }
@@ -189,7 +190,7 @@ public class CollectorEngine {
         scheduler = new Scheduler(s.pollInterval().toMillis());
         while (running) {
             try {
-                long version = settingsVersion.getAsLong();
+                long version = settingsVersion.getAsLong() + keysVersion.get();   // a commit, or keys written to .env
                 if (version != appliedVersion) {
                     s = settings.get();
                     reconcile(s);
@@ -234,6 +235,13 @@ public class CollectorEngine {
      * Settings changed: keep, update or rebuild each lane by name (design M7, a reconciler). O(sources). A lane whose
      * connection is unchanged keeps its token bucket, gate, breakers, metadata cache and units.
      */
+    /** Keys were written to .env (add-settings-page S4): the scheduler re-reads them and rebuilds only changed lanes. */
+    public void keysChanged() {
+        keysVersion.incrementAndGet();
+    }
+
+    private final java.util.concurrent.atomic.AtomicLong keysVersion = new java.util.concurrent.atomic.AtomicLong();
+
     private void reconcile(CollectorSettings s) {
         Shared newShared = Shared.of(s);
         boolean rebuildAll = !newShared.equals(shared);
@@ -257,6 +265,13 @@ public class CollectorEngine {
         }
         for (LaneConfig config : wanted.values()) {
             Lane old = lanes.get(config.name());
+            DatadogCredentials current = keys.keys(config);                   // .env read on every reload (add-settings-page S4)
+            if (old != null && !old.sameKeys(current)) {
+                drop(old);                                                    // new keys: this lane alone starts again
+                lanes.remove(config.name());
+                log.info("Source '{}': keys changed, starting it again", config.name());
+                old = null;
+            }
             if (old != null && !rebuildAll && old.config().equals(config)) {
                 // Untouched connection: keeps its bucket, gate, breakers and timing. Its dashboard files may still have
                 // changed in this commit, so it re-plans (no network: the files were loaded with the settings, J3);
@@ -272,7 +287,7 @@ public class CollectorEngine {
             if (old != null) {
                 drop(old);
             }
-            Lane lane = build(config, s);
+            Lane lane = build(config, s, current);
             lanes.put(config.name(), lane);
             log.info("Source '{}' ({}): {}", config.name(), config.site(),
                     lane.ready() ? "ready" : "keys missing: " + lane.keysMissing() + "; nothing will be sent");
@@ -280,7 +295,10 @@ public class CollectorEngine {
     }
 
     private Lane build(LaneConfig config, CollectorSettings s) {
-        DatadogCredentials credentials = keys.keys(config);
+        return build(config, s, keys.keys(config));
+    }
+
+    private Lane build(LaneConfig config, CollectorSettings s, DatadogCredentials credentials) {
         MetricSource source = sources.create(config, credentials, clock);
         if (s.recording().enabled()) {
             source = new RecordingSource(source, recordingDir(Path.of(s.recording().dir()), config.name()), clock);

@@ -1,0 +1,18 @@
+# The Datadog regions to watch and their dashboards (add-settings-page). Written by the Settings tab of the live page,
+# one commit per change; hand edits work too (commit them), but comments in this file are not kept by the page.
+# Read together with collector.yml; this file wins. Keys are given by the NAME of the variable in .env, never by value.
+anomaly:
+  collector:
+    # One entry per site, each collected in its own lane (its own rate limit, 429 wait, calls in flight and breakers).
+    sources:
+__SOURCES__
+    #  - name: eu                             #   example: a second region (its keys in .env; no restart needed)
+    #    site: datadoghq.eu                   #   datadoghq.com (US1), datadoghq.eu, us3/us5/ap1/ap2.datadoghq.com, ddog-gov.com
+    #    api-key-env: DD_EU_API_KEY
+    #    app-key-env: DD_EU_APP_KEY
+    #    dashboards:                          #   exported JSON files in config-repo/dashboards/<source>/
+    #      - file: dashboards/eu/shop.json    #   Datadog: dashboard > Share > Export dashboard JSON
+    #        id: stu-vwx-yz1                  #   optional: for links, when the file has no id (from its URL)
+    #        presets: all                     #   optional: every saved view, each as its own view; or [Name1, Name2]
+    #        filters: { env: prod }           #   optional: wins over the file's default for that variable
+    #    max-concurrent-requests: 4           #   optional, else the shared value below

@@ -38,6 +38,7 @@ message ResolveIncident {
   string incident_id = 2;
   string reason = 3;                    // 1 to 500 characters
   int64 requested_ms = 4;               // UTC milliseconds
+  string series_id = 5;                 // added in add-line-reasons: the line explained; "" = every line still needing a reason
 }
 
 message AffectedSeries {
@@ -53,6 +54,9 @@ message AffectedSeries {
   string dashboard_title = 10;
   string panel_title = 11;
   string panel_path = 12;               // added in add-incident-history: the panel's group or section, "" when none
+  string explanation = 13;              // added in add-line-reasons: a person's reason for this line ("reason" above is the direction)
+  int64 explained_ms = 14;              // when it was given (UTC milliseconds); 0 until then
+  bool bau = 15;                        // business as usual: needs no reason (settings: detector.yml bau)
 }
 
 message Link {

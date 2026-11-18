@@ -63,6 +63,11 @@ public final class Lane {
         this.nextDiscoveryMs = 0;
     }
 
+    /** True when the lane runs with these keys (no keys object: a test lane, kept). */
+    boolean sameKeys(DatadogCredentials other) {
+        return credentials == null || other == null || credentials.sameKeys(other);
+    }
+
     /** False when a key is missing: the lane then sends nothing at all (spec: keys missing). */
     public boolean ready() {
         return credentials == null || credentials.complete();

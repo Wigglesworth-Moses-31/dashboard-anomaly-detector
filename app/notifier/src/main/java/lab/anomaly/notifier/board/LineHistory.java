@@ -40,13 +40,19 @@ public final class LineHistory {
             byLine.computeIfAbsent(s.getSeriesId(), k -> new LinkedHashMap<>())
                     .put(incident.getIncidentId(), new Occurrence(incident.getIncidentId(), incident.getTitle(),
                             incident.getStartedMs(), incident.getEndedMs(), s.getSignal(), s.getReason(), s.getPeakValue(),
-                            s.getNormalValue(), s.getUnit(), reasonOf(incident)));
+                            s.getNormalValue(), s.getUnit(), reasonOf(incident, s)));
         }
     }
 
-    /** The reason a person gave when closing (add-incident-resolution); "" until then. */
-    private static String reasonOf(Incident incident) {
-        return incident.getReason();
+    /**
+     * The line's own reason (add-line-reasons): its explanation, "BAU" for business-as-usual lines, else the incident's
+     * reason (incidents closed before reasons were per line); "" until one is given.
+     */
+    static String reasonOf(Incident incident, AffectedSeries s) {
+        if (s.getBau()) {
+            return "BAU";
+        }
+        return s.getExplanation().isEmpty() ? incident.getReason() : s.getExplanation();
     }
 
     /** The line's past within the window before {@code nowMs}; {@code current} (may be null) is left out of "last". */

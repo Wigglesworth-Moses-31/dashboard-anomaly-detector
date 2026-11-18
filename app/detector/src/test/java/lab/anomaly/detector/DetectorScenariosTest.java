@@ -689,4 +689,126 @@ class DetectorScenariosTest {
         assertThat(after).filteredOn(c -> c.type() == EventType.EVENT_TYPE_OPENED).singleElement()
                 .satisfies(c -> assertThat(c.incident().getIncidentId()).isEqualTo(calm.incident().getIncidentId()));
     }
+
+    // ---- add-line-reasons: a reason per line, BAU lines need none -----------------------------------------------
+
+    private static final lab.anomaly.contracts.v1.IncidentState CALM = lab.anomaly.contracts.v1.IncidentState.INCIDENT_STATE_CALM;
+
+    /** Latency and 500s of /v1/invoices spike together (one incident of two lines) and go calm; returns the time after. */
+    private long calmTwoLines(SeriesDescriptor lat, SeriesDescriptor err) {
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(lat, t, 138 + i % 3);
+            value(err, t, 2);
+            t += STEP;
+        }
+        for (int i = 0; i < 3; i++) {
+            value(lat, t, 1213);
+            value(err, t, 30);
+            t += STEP;
+        }
+        for (int i = 0; i < 14; i++) {
+            value(lat, t, 138 + i % 3);
+            value(err, t, 2);
+            t += STEP;
+        }
+        return t;
+    }
+
+    @Test
+    void eachLineGetsItsOwnReasonAndTheLastOneClosesTheCalmIncident() {
+        SeriesDescriptor lat = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor err = add(count("ffff000000000006", Map.of("api", "/v1/invoices", "status_code", "500"), "Count"));
+        calmTwoLines(lat, err);
+        String id = calmed().get(0).incident().getIncidentId();
+        List<Change> first = detector.resolve(id, lat.getSeriesId(), "slow database", 5L);
+        assertThat(first).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_UPDATED);
+            assertThat(c.incident().getState()).isEqualTo(CALM);
+            assertThat(c.incident().getSeriesList()).filteredOn(s -> s.getSeriesId().equals(lat.getSeriesId()))
+                    .singleElement().satisfies(s -> {
+                        assertThat(s.getExplanation()).isEqualTo("slow database");
+                        assertThat(s.getExplainedMs()).isEqualTo(5L);
+                    });
+        });
+        assertThat(detector.resolve(id, lat.getSeriesId(), "again", 6L)).as("an explained line is not waiting").isNotEmpty();
+        List<Change> last = detector.resolve(id, err.getSeriesId(), "bad deploy", 7L);
+        assertThat(last).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_CLOSED);
+            assertThat(c.incident().getReason()).isEqualTo("2 reasons");
+        });
+    }
+
+    @Test
+    void sameReasonForAllClosesEvenAnOpenIncidentButOneLineDoesNot() {
+        SeriesDescriptor lat = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor err = add(count("ffff000000000006", Map.of("api", "/v1/invoices", "status_code", "500"), "Count"));
+        long t = T0;
+        for (int i = 0; i < WARM; i++) {
+            value(lat, t, 138 + i % 3);
+            value(err, t, 2);
+            t += STEP;
+        }
+        for (int i = 0; i < 3; i++) {
+            value(lat, t, 1213);
+            value(err, t, 30);
+            t += STEP;
+        }
+        String id = of(EventType.EVENT_TYPE_OPENED).get(0).incident().getIncidentId();
+        assertThat(detector.resolve(id, lat.getSeriesId(), "slow database", 1L)).singleElement()
+                .satisfies(c -> assertThat(c.type()).as("open: a single line waits for calm").isEqualTo(EventType.EVENT_TYPE_UPDATED));
+        assertThat(detector.resolve(id, "", "gateway restart", 2L)).singleElement().satisfies(c -> {
+            assertThat(c.type()).isEqualTo(EventType.EVENT_TYPE_CLOSED);
+            assertThat(c.incident().getSeriesList()).extracting(s -> s.getExplanation())
+                    .containsExactlyInAnyOrder("slow database", "gateway restart");
+            assertThat(c.incident().getReason()).isEqualTo("2 reasons");
+        });
+    }
+
+    @Test
+    void aGeneralLineIsBauAndABauOnlyIncidentClosesByItself() {
+        SeriesDescriptor q = add(Fixtures.line("ffff000000000007", "lab.queue.depth", Kind.KIND_GAUGE, "", Map.of(), LAB, LAB_TITLE, "Queue depth"));
+        long t = normal(q, T0, WARM, 100);
+        for (int i = 0; i < 3; i++) {
+            value(q, t + i * STEP, 300);
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement().satisfies(c -> assertThat(c.incident().getSeries(0)).satisfies(s -> {
+            assertThat(s.getBau()).isTrue();
+            assertThat(s.getExplanation()).isEqualTo("BAU (business as usual)");
+        }));
+        normal(q, t + 3 * STEP, 14, 100);
+        assertThat(calmed()).isEmpty();
+        assertThat(of(EventType.EVENT_TYPE_CLOSED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getReason()).isEqualTo("BAU"));
+    }
+
+    @Test
+    void fewerServerErrorsAreBauButMoreAreNot() {
+        SeriesDescriptor e = add(count("aaaa000000000500", Map.of("status", "500"), "Request Counts by Status Code"));
+        assertThat(Fixtures.defaults().isBau("errors", "down")).isTrue();
+        assertThat(Fixtures.defaults().isBau("errors", "up")).isFalse();
+        assertThat(Fixtures.defaults().isBau("general", "silent")).isTrue();
+        long t = normal(e, T0, WARM, 2);
+        for (int i = 0; i < 4; i++) {
+            value(e, t, 40);
+            t += STEP;
+        }
+        assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getSeries(0).getBau()).isFalse());
+    }
+
+    @Test
+    void anExplainedLineThatSpikesAgainNeedsANewReason() {
+        SeriesDescriptor lat = add(latency("ffff000000000001", "/v1/invoices"));
+        SeriesDescriptor err = add(count("ffff000000000006", Map.of("api", "/v1/invoices", "status_code", "500"), "Count"));
+        long t = calmTwoLines(lat, err);
+        String id = calmed().get(0).incident().getIncidentId();
+        detector.resolve(id, lat.getSeriesId(), "slow database", 5L);
+        value(lat, t, 1300);
+        value(lat, t + STEP, 1300);
+        Change back = changes.get(changes.size() - 1);
+        assertThat(back.incident().getIncidentId()).isEqualTo(id);
+        assertThat(back.incident().getSeriesList()).filteredOn(s -> s.getSeriesId().equals(lat.getSeriesId()))
+                .singleElement().satisfies(s -> assertThat(s.getExplanation()).isEmpty());
+    }
 }

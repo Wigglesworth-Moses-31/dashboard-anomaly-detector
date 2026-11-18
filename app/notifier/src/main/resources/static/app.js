@@ -181,7 +181,8 @@ function apply(ev, live) {
   incidents.set(v.id, v);
   insertSorted(v);
   count(v, +1);
-  if (live && !old) { v.row.classList.add("fresh"); if (ev.type === "EVENT_TYPE_OPENED" && caughtUp) newlyOpened.push(v); }
+  // no notification for an incident of only business-as-usual lines (add-line-reasons L4)
+  if (live && !old) { v.row.classList.add("fresh"); if (ev.type === "EVENT_TYPE_OPENED" && caughtUp && !v.bauOnly) newlyOpened.push(v); }
   if (filterText) v.row.classList.toggle("hidden", !v.search.includes(filterText));
 }
 
@@ -201,9 +202,13 @@ function makeView(ev) {
     label: title.lastIndexOf(": ") > 0 ? title.slice(0, title.lastIndexOf(": ")) : title,   // labels may contain ": "
     search: (title + " " + series.map((s) => [s.signal, s.metric, s.panel_title, s.panel_path, s.dashboard_title, ...Object.values(s.group_tags || {})].join(" ")).join(" ")).toLowerCase(),
     expanded: false,
+    // add-line-reasons: lines still needing a person's reason; BAU lines never do
+    waiting: series.filter((s) => !s.bau && !s.explanation).map((s) => s.series_id),
+    bauOnly: series.length > 0 && series.every((s) => s.bau),
   };
+  forgetAnswered(v, series);
   v.row = open ? openRow(v, inc, series) : closedRow(v);
-  if (!open && reasons.has(v.id)) { clearTimeout(reasons.get(v.id).timer); reasons.delete(v.id); drafts.delete(v.id); }
+  if (v.bauOnly) v.row.classList.add("bau-only");
   return v;
 }
 
@@ -217,7 +222,8 @@ function openRow(v, inc, series) {
     ? "calm since " + time(v.endMs) + " · lasted " + duration(v.endMs - v.startMs)
     : "since " + time(v.startMs) + " · " + duration(Date.now() - v.startMs));
   head.append(v.durEl);                       // no dashboard links on the page (add-incident-history H3)
-  row.append(head, lines(series, v.id), reasonBox(v));
+  row.append(head, lines(series, v));
+  if (v.waiting.length >= 2) row.append(reasonBox(v.id, "", "Same reason for all " + v.waiting.length + " lines (closes it)"));
   return row;
 }
 
@@ -235,7 +241,7 @@ function closedRow(v) {
 // The affected lines as a small tree per incident (add-incident-history H3):
 //   view (dashboard · saved view) → panel group → panel → line tags · value · normal · change · ▸ history
 // One Map per level, in first-seen order: O(lines). Full text, wrapped; nothing is cut.
-function lines(series, incidentId) {
+function lines(series, v) {
   const tree = new Map();
   for (const s of series) {
     const view = s.dashboard_title || "Dashboard", group = s.panel_path || "", panel = s.panel_title || "Panel";
@@ -253,7 +259,11 @@ function lines(series, incidentId) {
       if (group) box.append(el("div", "t-group", group));
       for (const [panel, list] of panels) {
         box.append(el("div", group ? "t-panel" : "t-panel t-nogroup", panel));
-        for (const s of list) box.append(leaf(s, incidentId, group));
+        for (const s of list) {
+          box.append(leaf(s, v.id, group));
+          const why = lineReason(s, v);
+          if (why) box.append(why);
+        }
       }
     }
   }
@@ -262,7 +272,7 @@ function lines(series, incidentId) {
 
 function leaf(s, incidentId, group) {
   const c = colorOf(s), m = meter(s);
-  const row = el("div", group ? "t-line" : "t-line t-nogroup");
+  const row = el("div", (group ? "t-line" : "t-line t-nogroup") + (s.bau ? " bau" : ""));
   const bar = el("div", "bar"), fill = el("div", "fill f-" + c);
   fill.style.width = Math.max(4, Math.round(m.width * 100)) + "%";
   bar.append(fill);
@@ -308,35 +318,63 @@ function renderPast(box, past) {
   }
 }
 
-// ---- closing with a reason (add-incident-resolution S5) ---------------------------------------------------
-// drafts: what was typed, kept when the row is rebuilt by a live update; reasons: sent and waiting for the closing event
+// ---- reasons, one per line (add-incident-resolution S5, add-line-reasons L4) ---------------------------------
+// A box is keyed "incident|line" ("incident|" = every line still waiting). drafts: what was typed, kept when the row
+// is rebuilt by a live update; reasons: sent and waiting for the Detector's answer.
 const drafts = new Map();
 const reasons = new Map();
 const MAX_REASON = 500;
-function reasonBox(v) {
-  const box = el("div", "reason-box");
-  box.dataset.id = v.id;
+const keyOf = (incident, line) => incident + "|" + (line || "");
+
+/** Under a line: "BAU", its reason, or (while the incident is not closed) a box to give one. */
+function lineReason(s, v) {
+  if (s.bau) return el("div", "t-reason muted", "BAU (business as usual): no reason needed");
+  if (s.explanation) return el("div", "t-reason", "Reason: " + s.explanation + (Number(s.explained_ms) ? " · given " + shortTime(Number(s.explained_ms)) : ""));
+  if (!v.open) return null;
+  // the only waiting line: its reason is the reason for every waiting line, so it closes the incident at once
+  const only = v.waiting.length === 1;
+  return reasonBox(v.id, only ? "" : s.series_id, only ? "Give reason (closes it)" : "Give reason", "t-reason");
+}
+
+function reasonBox(incident, line, label, extra) {
+  const key = keyOf(incident, line);
+  const box = el("div", "reason-box" + (extra ? " " + extra : ""));
+  box.dataset.key = key; box.dataset.incident = incident; box.dataset.line = line || "";
   const input = el("textarea", "reason-in");
-  input.maxLength = MAX_REASON; input.rows = 1; input.placeholder = "Why did this happen? (needed to close it)";
-  input.value = drafts.get(v.id) || "";
+  input.maxLength = MAX_REASON; input.rows = 1;
+  input.placeholder = line ? "Why did this line change?" : "Why did this happen?";
+  input.value = drafts.get(key) || "";
   const counter = el("span", "reason-count", input.value.length + "/" + MAX_REASON);
-  const send = el("button", "reason-send", "Close with reason");
+  const send = el("button", "reason-send", label);
   const state = el("span", "reason-state", "");
-  const r = reasons.get(v.id);
+  const r = reasons.get(key);
   if (r) { state.textContent = r.text; state.classList.toggle("bad", !!r.bad); }
   box.append(input, counter, send, state);
   return box;
 }
-function showReasonState(id, text, bad) {
-  const r = reasons.get(id) || {};
-  r.text = text; r.bad = bad; reasons.set(id, r);
-  const box = document.querySelector('.reason-box[data-id="' + CSS.escape(id) + '"]');
+
+/** Forgets sent reasons and drafts the Detector has answered: the incident closed, or that line now has a reason. */
+function forgetAnswered(v, series) {
+  const answered = new Set(series.filter((s) => s.explanation).map((s) => keyOf(v.id, s.series_id)));
+  if (!v.open || v.waiting.length === 0) answered.add(keyOf(v.id, ""));
+  for (const key of [...reasons.keys(), ...drafts.keys()]) {
+    if (!key.startsWith(v.id + "|")) continue;
+    if (!v.open || answered.has(key)) {
+      reasons.delete(key); drafts.delete(key);
+    }
+  }
+}
+
+function showReasonState(key, text, bad) {
+  const r = reasons.get(key) || {};
+  r.text = text; r.bad = bad; reasons.set(key, r);
+  const box = document.querySelector('.reason-box[data-key="' + CSS.escape(key) + '"]');
   if (box) { const s = box.querySelector(".reason-state"); s.textContent = text; s.classList.toggle("bad", !!bad); }
 }
 document.addEventListener("input", (e) => {
   if (!e.target.classList.contains("reason-in")) return;
-  const id = e.target.closest(".reason-box").dataset.id;
-  drafts.set(id, e.target.value);
+  const key = e.target.closest(".reason-box").dataset.key;
+  drafts.set(key, e.target.value);
   e.target.parentElement.querySelector(".reason-count").textContent = e.target.value.length + "/" + MAX_REASON;
 });
 document.addEventListener("keydown", (e) => {
@@ -348,17 +386,19 @@ document.addEventListener("click", async (e) => {
   const b = e.target.closest(".reason-send");
   if (!b) return;
   e.stopPropagation();
-  const id = b.closest(".reason-box").dataset.id;
-  const text = (drafts.get(id) || "").trim();
-  if (!text || text.length > MAX_REASON) { showReasonState(id, "a reason of 1 to " + MAX_REASON + " characters is needed", true); return; }
-  showReasonState(id, "saving…", false);
+  const box = b.closest(".reason-box"), key = box.dataset.key;
+  const text = (drafts.get(key) || "").trim();
+  if (!text || text.length > MAX_REASON) { showReasonState(key, "a reason of 1 to " + MAX_REASON + " characters is needed", true); return; }
+  showReasonState(key, "saving…", false);
+  const body = { reason: text };
+  if (box.dataset.line) body.line = box.dataset.line;
   try {
-    const r = await fetch("/incidents/" + encodeURIComponent(id) + "/reason",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: text }) });
-    if (r.status === 202) { reasons.get(id).deadline = Date.now() + 10000; return; }   // the closing event clears it
-    const body = await r.json().catch(() => ({}));
-    showReasonState(id, "not saved: " + (body.problem || "HTTP " + r.status), true);
-  } catch (err) { showReasonState(id, "not saved: the Notifier cannot be reached", true); }
+    const r = await fetch("/incidents/" + encodeURIComponent(box.dataset.incident) + "/reason",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 202) { reasons.get(key).deadline = Date.now() + 10000; return; }   // the Detector's event clears it
+    const problem = await r.json().catch(() => ({}));
+    showReasonState(key, "not saved: " + (problem.problem || "HTTP " + r.status), true);
+  } catch (err) { showReasonState(key, "not saved: the Notifier cannot be reached", true); }
 });
 
 // ---- ordered lists: binary search, O(log n) to find, one DOM move ----------------------------------------
@@ -442,7 +482,7 @@ $("closedList").addEventListener("click", (e) => {
   if (!v) return;
   v.expanded = !v.expanded;
   row.classList.toggle("expanded", v.expanded);
-  if (v.expanded) { v.detail = el("div"); v.detail.append(lines(v.ev.incident.series || [], v.id)); row.append(v.detail); }
+  if (v.expanded) { v.detail = el("div"); v.detail.append(lines(v.ev.incident.series || [], v)); row.append(v.detail); }
   else if (v.detail) { v.detail.remove(); v.detail = null; }       // freed when collapsed
 });
 $("groups").addEventListener("click", (e) => {
@@ -455,7 +495,7 @@ $("groups").addEventListener("click", (e) => {
 setInterval(() => {
   const now = Date.now();
   for (const id of openIds) { const v = incidents.get(id); v.durEl.textContent = "since " + time(v.startMs) + " · " + duration(now - v.startMs); }
-  for (const [id, r] of reasons) if (r.deadline && now > r.deadline) { r.deadline = 0; showReasonState(id, "not saved: no answer from the Detector yet (it will close when the Detector applies it, or send again)", true); }
+  for (const [id, r] of reasons) if (r.deadline && now > r.deadline) { r.deadline = 0; showReasonState(id, "not saved: no answer from the Detector yet (it will apply it when it can, or send again)", true); }
   $("lastChange").textContent = lastChangeAt ? "last change " + duration(now - lastChangeAt) + " ago" : "";
 }, 1000);
 

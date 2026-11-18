@@ -15,6 +15,9 @@ anomaly:
     history: 30m                            # window for "normal" (at most 2d: the Store keeps no more)
     min-history: 10m                        # judge a line only after it has been known this long
     calm-period: 2m                         # all lines calm this long before an incident closes
+    bau:                                    # business as usual: these anomalies need no reason (add-line-reasons)
+      - { signal: general }                 #   lines no rule recognises, any direction (up, down, silent)
+      - { signal: errors, direction: down } #   fewer errors is good news
     silence-after: 1m                       # no value this long behind the rest of its dashboard = silent
     silence-min-presence: 0.9               # only lines with a value in 9 of 10 steps can go silent
     silence-skip-signals: [errors, error-rate]   # an error line that stops reporting is good news

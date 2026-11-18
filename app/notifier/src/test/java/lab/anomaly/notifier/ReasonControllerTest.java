@@ -53,4 +53,27 @@ class ReasonControllerTest {
         assertThat(h.past("ffff000000000001", null, 5000).all()).singleElement()
                 .satisfies(o -> assertThat(o.reason()).isEqualTo("deploy rolled back"));
     }
+
+    // ---- add-line-reasons ---------------------------------------------------------------------------------------
+
+    @Test
+    void aReasonForOneLineCarriesTheLineAndNoLineMeansAllWaiting() {
+        controller.reason("inc-7", Map.of("reason", "slow database", "line", "ffff000000000001"));
+        controller.reason("inc-7", Map.of("reason", "gateway restart"));
+        assertThat(sent).extracting(ResolveIncident::getSeriesId).containsExactly("ffff000000000001", "");
+        assertThat(controller.reason("inc-7", Map.of("reason", "why", "line", "a b")).getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
+    void eachLinesHistoryShowsItsOwnReasonOrBau() {
+        LineHistory h = new LineHistory();
+        h.accept(Incident.newBuilder().setIncidentId("i2").setState(IncidentState.INCIDENT_STATE_CLOSED).setStartedMs(1000).setEndedMs(2000)
+                .setReason("2 reasons")
+                .addSeries(AffectedSeries.newBuilder().setSeriesId("a").setExplanation("slow database"))
+                .addSeries(AffectedSeries.newBuilder().setSeriesId("b").setBau(true).setExplanation("BAU (business as usual)"))
+                .addSeries(AffectedSeries.newBuilder().setSeriesId("c")).build());
+        assertThat(h.past("a", null, 3000).all()).singleElement().satisfies(o -> assertThat(o.reason()).isEqualTo("slow database"));
+        assertThat(h.past("b", null, 3000).all()).singleElement().satisfies(o -> assertThat(o.reason()).isEqualTo("BAU"));
+        assertThat(h.past("c", null, 3000).all()).singleElement().satisfies(o -> assertThat(o.reason()).isEqualTo("2 reasons"));
+    }
 }

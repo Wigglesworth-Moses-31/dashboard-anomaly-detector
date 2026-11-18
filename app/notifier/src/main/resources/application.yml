@@ -7,3 +7,13 @@ spring:
   cloud:
     config:
       fail-fast: true       # stop at start if the Config Service cannot be reached
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true    # the browser asks before reusing the page's files: a new build is seen at once
+  rsocket:
+    server:
+      address: 127.0.0.1    # the page's live stream: this machine only (add-settings-page S6)
+server:
+  address: 127.0.0.1        # this machine only (add-settings-page S6): it serves the page and the settings

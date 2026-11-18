@@ -105,3 +105,53 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 .reason-state { font-size: 12px; color: var(--muted); align-self: center; }
 .reason-state.bad { color: var(--red, #e5534b); }
 .reason-shown { font-size: 12px; color: var(--muted); margin: 4px 0 0 2px; overflow-wrap: anywhere; }
+
+/* add-line-reasons: a reason per line; business-as-usual lines and incidents are dimmed */
+.tree .t-reason { margin: 0 0 6px 56px; font-size: 12px; overflow-wrap: anywhere; }
+.tree .t-reason.muted { color: var(--muted); font-style: italic; }
+.tree .reason-box.t-reason { margin-top: 2px; }
+.tree .t-line.bau { opacity: .55; }
+.inc.bau-only { opacity: .6; }
+@media (max-width: 700px) { .tree .t-reason { margin-left: 14px; } }
+
+/* add-settings-page: the tabs and the Settings tab */
+.tabs { display: flex; gap: 4px; margin-left: 12px; }
+.tab { color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: 8px; }
+.tab.active { color: var(--text); background: var(--meter-bg); }
+.s-notice { background: var(--highlight); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.s-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.s-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.s-actions { display: inline-flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.s-btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 4px 10px;
+  cursor: pointer; font-size: 12px; text-decoration: none; display: inline-block; }
+.s-btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.s-btn.danger { color: var(--red); }
+.s-btn:disabled { opacity: .5; cursor: default; }
+.s-ok { color: var(--green); font-size: 12px; } .s-bad, .s-badtext { color: var(--red); }
+.s-bad { font-size: 12px; }
+.s-warn { color: var(--amber); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.s-state { font-size: 12px; color: var(--muted); } .s-state.bad { color: var(--red); }
+.s-dash { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.s-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 6px; }
+.s-file { font-weight: 550; overflow-wrap: anywhere; }
+.s-detail, .s-upload { margin-top: 8px; }
+.s-keys { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.s-keys input, .s-new select { background: var(--meter-bg); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 220px; }
+.s-new { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.s-new select { align-self: flex-start; }
+.s-summary, .s-views, .s-diff, .s-lines { margin: 8px 0; }
+.s-groups { margin-top: 6px; } .s-group { font-weight: 550; margin-top: 4px; overflow-wrap: anywhere; }
+.s-panels { margin-left: 12px; overflow-wrap: anywhere; }
+.s-view { display: block; margin-left: 4px; font-size: 13px; }
+.s-plus { color: var(--green); } .s-minus { color: var(--red); }
+.s-pl { margin-left: 12px; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .s-keys input { min-width: 0; flex: 1 1 100%; } .tabs { margin-left: 0; } }
+
+/* add-settings-page S5b: the JSON editor */
+.s-editbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.s-editor { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; height: 60vh; min-height: 260px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.s-gutter { margin: 0; padding: 8px 8px 8px 6px; min-width: 52px; text-align: right; color: var(--muted); background: var(--meter-bg);
+  overflow: hidden; user-select: none; font: inherit; white-space: pre; }
+.s-code { flex: 1; margin: 0; padding: 8px; border: 0; outline: none; resize: none; background: var(--panel); color: var(--text);
+  font: inherit; white-space: pre; overflow: auto; tab-size: 2; }

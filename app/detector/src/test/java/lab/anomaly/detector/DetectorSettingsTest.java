@@ -48,4 +48,10 @@ class DetectorSettingsTest {
         assertThatThrownBy(() -> Fixtures.holderEdited(t -> t.replace("\"status_code=4*\"", "\"status_code\"")))
                 .hasMessageContaining("'status_code' must be key=pattern");
     }
+
+    @Test
+    void aBauEntryWithAnUnknownDirectionIsRejected() {
+        rejected(Map.of("anomaly.detector.bau[0].signal", "errors", "anomaly.detector.bau[0].direction", "sideways"),
+                "bau");
+    }
 }

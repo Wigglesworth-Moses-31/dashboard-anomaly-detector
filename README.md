@@ -83,7 +83,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | Live incidents of the day: open ones first; each affected line as a path **view → panel group → panel → line → value** (normal and the change, e.g. −94%), shown in full; **▸ history** on a line shows the last time before and every incident of that line in the last 2 days, with their reasons; an incident whose lines are normal again waits under **Needs a reason** until someone types why (**Close with reason**, kept with the incident) — nothing closes by itself; counts per group, a filter (`/`). 🔔 and 🔊 switch on a desktop notification and a sound for new incidents |
+| http://localhost:8104 | Live incidents of the day: open ones first; each affected line as a path **view → panel group → panel → line → value** (normal and the change, e.g. −94%), shown in full; **▸ history** on a line shows the last time before and every incident of that line in the last 2 days, with their reasons; each line of an incident takes **its own reason** (**Give reason**, kept with the incident), or one **Same reason for all** for every waiting line; an incident whose lines are normal again waits under **Needs a reason** until every line has one. Business-as-usual (BAU) lines — unrecognised (`general`) metrics in any direction, and errors going down — need no reason: they are dimmed and marked BAU, and an incident of only BAU lines closes by itself when calm (no notification). The BAU list is `bau` in `detector.yml`; counts per group, a filter (`/`). 🔔 and 🔊 switch on a desktop notification and a sound for new incidents. The **Settings** tab manages regions, keys and dashboards (see *Change settings*) |
 | `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
@@ -104,7 +104,29 @@ Ask for a report of a day yourself: `curl -s -X POST localhost:8105/reports/2026
 
 ## Change settings (no restart)
 
-Everything is in `config-repo/` (its own Git repository). Edit, then commit:
+### From the page: the Settings tab
+
+Open **http://localhost:8104/#settings** (this machine only: the page and the settings services answer on
+`127.0.0.1`, never on the network).
+
+| You want to | In the Settings tab |
+|---|---|
+| Watch a region (at most two: US and EU) | **Add a region**: pick US or EU, type its API and application keys, **Check keys and add**. The keys are checked with Datadog (read-only) and written only to `.env`; the region is collected from the next poll, no restart |
+| New keys for a region | **Replace keys** (same checks); only that region starts again |
+| Stop watching a region | **Remove region**: its entry and dashboard files go in one commit, its keys leave `.env` |
+| Watch a dashboard | **+ Add dashboard**: choose the exported JSON. The page shows its panels by group and saved views; tick the views to watch; **Check panels** asks each panel once (read-only); **Add** |
+| See a dashboard | **Open** (panels, variables, saved views; change the watched views) or **Download** |
+| Change a dashboard | **Edit JSON**: the file as it is, with line numbers; a JSON mistake is shown with its line and column while you type; **Format**, **Undo all**, **Check** (panels and views added or removed), **Save**. Or **Replace** with a newer export |
+| Stop watching a dashboard | **Delete** |
+
+Every change is **one commit** in `config-repo` ("settings page: add eu/shop.json"), so `git log` shows it and
+`git revert` undoes it; nothing is pushed. A file you edited by hand and did not commit is never overwritten (the page
+says "commit or discard your edit first"), and a page that is out of date is refused ("reload the page").
+
+### By hand
+
+Everything is in `config-repo/` (its own Git repository): `regions.yml` (regions and their dashboards, also written
+by the page) and one file per service. Edit, then commit:
 
 ```bash
 cd config-repo
@@ -117,8 +139,8 @@ breaks a rule (for example a 48-hour report window) is **refused**, the old valu
 
 | You want to | Change |
 |---|---|
-| Watch another dashboard | Put its exported JSON in `config-repo/dashboards/<source>/`, add `- file: dashboards/<source>/<name>.json` under that source's `dashboards`, check, commit |
-| Watch another region or account | `collector.yml` → `sources` (add an entry), its two keys in `.env`, then restart the Collector once (`scripts/system.sh stop; scripts/system.sh start`) so it can read the new keys |
+| Watch another dashboard | Put its exported JSON in `config-repo/dashboards/<source>/`, add `- file: dashboards/<source>/<name>.json` under that source's `dashboards` in `regions.yml`, check, commit |
+| Watch another region or account | `regions.yml` → `sources` (add an entry), its two keys in `.env` (the Collector re-reads `.env` on every settings change: no restart) |
 | Give a dashboard's `$variable` a value | Edit its `default` in the JSON file, or add `filters: { env: prod }` next to the file (wins over the file) |
 | Watch a dashboard's saved views | `presets: all` next to the file (every saved view, each its own view), or `presets: [Payments, Billing]` |
 | Fewer Datadog calls | `batch-formulas` (default 40): panels due together share one call |
@@ -181,7 +203,13 @@ latency up`), the same API in two regions is two incidents, and links open the r
 by themselves. Since 17 Nov 2026: in `detector.yml`, rule `errors`, add `"status=4*", "status=5*"` to `tags` (counts
 tagged `status`, not only `status_code`, are errors and alert only upwards). `settle-delay` needs no edit (60 s when
 missing). In `application.yml`: `time-zone: UTC` (today is the UTC day) and, optionally, `display-time-zones` (every
-time is shown in UTC, India and New York when the line is missing).
+time is shown in UTC, India and New York when the line is missing). Since 18 Nov 2026: `bau` in `detector.yml` (optional: when missing, `general` in any
+direction and `errors` going down are business as usual — copy the block from `config-template/detector.yml` to
+change it). Also since 18 Nov 2026: regions live in `regions.yml`. Nothing to do by hand: the first change made in
+the Settings tab moves `sources:` out of `collector.yml` in its own commit, comments kept. The Collector now reads
+its keys from `.env` itself (start with the new `scripts/system.sh`). A `collector.yml` in the old single-site form
+(`datadog-site` with `dashboards`) is shown read-only in the Settings tab: run `scripts/setup.sh` again to manage
+regions there.
 
 ## Storage stays small
 
@@ -204,7 +232,7 @@ Set `recording.enabled: true` in `collector.yml` for a while to save every Datad
 
 ```bash
 cd app
-./mvnw test                                   # 170+ tests, no Datadog or Docker needed
+./mvnw test                                   # 280+ tests, no Datadog or Docker needed
 PLATFORM_DB_PASSWORD=... ./mvnw test -Dlive.db=true   # also the database tests (platform running)
 ```
 

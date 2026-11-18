@@ -6,4 +6,7 @@ spring:
     import: "configserver:http://localhost:8888"
   cloud:
     config:
+      name: collector,regions   # regions.yml (written by the Settings tab) is read with collector.yml and wins
       fail-fast: true       # stop at start if the Config Service cannot be reached
+server:
+  address: 127.0.0.1        # this machine only (add-settings-page S6): it takes keys / serves the settings page
