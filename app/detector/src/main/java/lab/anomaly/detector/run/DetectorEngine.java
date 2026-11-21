@@ -158,7 +158,7 @@ public class DetectorEngine {
                 if (!records.isEmpty() && caughtUp(c)) {
                     changes.addAll(detector.checkSilence(readMs));
                 }
-                if (readMs >= nextReannounce) {                              // waiting incidents stay in Kafka's 2 days (S4)
+                if (readMs >= nextReannounce) {                              // waiting incidents stay in Kafka's 24 hours (S4, keep-one-day)
                     changes.addAll(detector.reannounce(readMs, REANNOUNCE_EVERY_MS));
                     nextReannounce = readMs + 3_600_000;
                 }
@@ -200,7 +200,7 @@ public class DetectorEngine {
         return any;
     }
 
-    private long nextReannounce = System.currentTimeMillis() + 3_600_000;
+    private long nextReannounce;                                       // 0: the first loop announces restored waiting incidents
     static final long REANNOUNCE_EVERY_MS = 12 * 3_600_000L;
 
     /** Close commands: checked, then applied by the book; unknown, closed or invalid ones change nothing (S3). */

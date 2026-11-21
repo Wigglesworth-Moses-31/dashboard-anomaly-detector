@@ -117,7 +117,7 @@ function regionCard(r) {
   for (const w of laneWarnings(r.name)) card.append(el("div", "s-warn", w));
   const bf = (health.components && health.components.collector && health.components.collector.details && health.components.collector.details.backfill) || {};
   for (const [view, pct] of Object.entries(bf)) {                 // add-backfill: "Shop (datadoghq.eu)" → "45%"
-    if (view.endsWith("(" + r.site + ")")) card.append(el("div", "s-progress", "Pulling the last 2 days of " + view.slice(0, view.lastIndexOf(" (")) + ": " + pct));
+    if (view.endsWith("(" + r.site + ")")) card.append(el("div", "s-progress", "Pulling the last 24 hours of " + view.slice(0, view.lastIndexOf(" (")) + ": " + pct));
   }
   card.append(keyBox);
   const table = el("div", "s-dash");

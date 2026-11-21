@@ -404,7 +404,7 @@ public class CollectorEngine {
 
     /** Which views the Store already has lines for; null = backfill off (tests, replay). */
     private volatile lab.anomaly.collector.backfill.StoreViews.Collected collected;
-    private volatile Duration backfillSpan;                    // tests; else the setting backfill-new-views (default 2d)
+    private volatile Duration backfillSpan;                    // tests; else the setting backfill-new-views (default 1d)
     private volatile Duration backfillWindow;                  // tests; else the setting backfill-window (default 4h)
     private volatile long backfillPauseMs = 500;
     /** Units waiting for their view's backfill: not scheduled for live polling until it is done. */
@@ -428,8 +428,8 @@ public class CollectorEngine {
         if (backfillSpan != null) {
             return backfillSpan;
         }
-        Duration d = environment == null ? Duration.ofDays(2)
-                : environment.getProperty("anomaly.collector.backfill-new-views", Duration.class, Duration.ofDays(2));
+        Duration d = environment == null ? Duration.ofDays(1)
+                : environment.getProperty("anomaly.collector.backfill-new-views", Duration.class, Duration.ofDays(1));
         return d.compareTo(Duration.ofDays(10)) > 0 ? Duration.ofDays(10) : d;      // never more than is kept
     }
 

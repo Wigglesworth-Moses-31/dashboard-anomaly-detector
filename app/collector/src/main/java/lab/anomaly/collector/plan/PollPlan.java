@@ -53,7 +53,7 @@ public final class PollPlan {
                 }
                 String key = new TimeseriesRequest(queries, panel.formulas(), 0, 0, 0).canonicalQuestion();
                 PollUnit.View view = new PollUnit.View(v.viewId(), v.viewTitle(), panel.title(), panel.path(), filters,
-                        groupIndex, panelIndex);                          // add-dashboard-view D1
+                        groupIndex, panelIndex, panel.widgetId());        // add-dashboard-view D1, add-datadog-look K1
                 PollUnit existing = byKey.get(key);
                 if (existing == null) {
                     byKey.put(key, new PollUnit(key, queries, panel.formulas(), List.of(view), lane));

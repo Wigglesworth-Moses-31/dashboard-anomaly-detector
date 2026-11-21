@@ -34,10 +34,16 @@ public record Dashboard(String id, String title, List<TemplateVariable> variable
     }
 
     /** One panel request: its questions and the formulas built from them. {@code path} = group or section titles. */
-    public record Panel(String title, String path, List<Query> queries, List<String> formulas) {
+    public record Panel(String title, String path, List<Query> queries, List<String> formulas, Long widgetId) {
         public Panel {
             queries = List.copyOf(queries);
             formulas = List.copyOf(formulas);
+            widgetId = widgetId == null ? 0L : widgetId;                   // recordings made before add-datadog-look
+        }
+
+        /** Without a widget id (0 = not known): tests and sources that have none. */
+        public Panel(String title, String path, List<Query> queries, List<String> formulas) {
+            this(title, path, queries, formulas, 0L);
         }
 
         /** "Upstream Service Metrics / Latencies", or just the title outside any group or section. */

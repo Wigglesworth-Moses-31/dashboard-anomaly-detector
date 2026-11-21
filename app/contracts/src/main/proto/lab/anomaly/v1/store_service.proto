@@ -34,6 +34,17 @@ message HistoryBatchRequest {
   int64 from_ms = 2;                    // inclusive, UTC milliseconds
   int64 to_ms = 3;                      // exclusive, UTC milliseconds
   Resolution resolution = 4;
+  int64 interval_ms = 5;                // added in add-datadog-look: roll raw values up to this interval (0 = as stored)
+  Rollup method = 6;                    // how each interval is rolled up (unspecified = average)
+}
+
+// add-datadog-look: Datadog's rollup methods; one value per interval
+enum Rollup {
+  ROLLUP_UNSPECIFIED = 0;
+  ROLLUP_AVG = 1;
+  ROLLUP_SUM = 2;
+  ROLLUP_MIN = 3;
+  ROLLUP_MAX = 4;
 }
 
 message RemoveRawRequest {

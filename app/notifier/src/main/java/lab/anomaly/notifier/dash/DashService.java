@@ -92,6 +92,55 @@ public class DashService implements DisposableBean {
         return settings.get().dashboards();
     }
 
+    /** Datadog-like auto intervals (add-datadog-look K8): the smallest giving at most 300 points over the range. */
+    static final long[] INTERVALS_MS = {10_000, 20_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000};
+
+    public static long autoInterval(Duration range) {
+        for (long i : INTERVALS_MS) {
+            if (range.toMillis() / i <= 300) {
+                return i;
+            }
+        }
+        return INTERVALS_MS[INTERVALS_MS.length - 1];
+    }
+
+    /** Datadog's default rollup for a query: its own {@code .rollup(method)}, else sum for {@code .as_count()}, else avg. */
+    static lab.anomaly.contracts.v1.Rollup method(String query) {
+        String q = query == null ? "" : query.replaceAll("\\.rollup\\(max, *10\\)\\s*$", "");   // our own step rollup
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\.rollup\\(\\s*(avg|sum|min|max)").matcher(q);
+        String found = null;
+        while (m.find()) {
+            found = m.group(1);
+        }
+        if (found != null) {
+            return switch (found) {
+                case "sum" -> lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM;
+                case "min" -> lab.anomaly.contracts.v1.Rollup.ROLLUP_MIN;
+                case "max" -> lab.anomaly.contracts.v1.Rollup.ROLLUP_MAX;
+                default -> lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG;
+            };
+        }
+        return q.contains(".as_count()") ? lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM : lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG;
+    }
+
+    /**
+     * Every line rolled up to the range's auto interval with its own method, computed by the Store: one call per method
+     * used (usually one or two). O(points returned).
+     */
+    public List<Series> rolled(List<String> ids, Duration range, long toMs, long intervalMs) {
+        long from = toMs - range.toMillis();
+        long start = ((from + intervalMs - 1) / intervalMs) * intervalMs;   // rounded up: never longer than the range
+        Map<lab.anomaly.contracts.v1.Rollup, List<String>> byMethod = new java.util.EnumMap<>(lab.anomaly.contracts.v1.Rollup.class);
+        for (String id : ids) {
+            Catalogue.Line l = catalogue.line(id);
+            byMethod.computeIfAbsent(method(l == null ? "" : l.query()), k -> new java.util.ArrayList<>()).add(id);
+        }
+        Map<String, List<Point>> points = new java.util.HashMap<>();
+        byMethod.forEach((m, list) -> points.putAll(store.history(list, start, toMs, intervalMs, m)));
+        return ids.stream().map(id -> new Series(id, points.getOrDefault(id, List.of()).stream()
+                .map(p -> new double[] {p.getTsMs(), p.getValue()}).toList())).toList();
+    }
+
     /** One Store call for the lines, then min-max thinning per line. Up to 1 hour: raw values; longer: per minute. */
     public List<Series> range(List<String> ids, Duration range, long toMs, int width) {
         long from = toMs - range.toMillis();

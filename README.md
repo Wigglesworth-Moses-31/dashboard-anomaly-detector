@@ -83,7 +83,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | **Live dashboards**, one page per region (US, EU): each watched dashboard collapsed or expanded (remembered), its panels in Datadog's group order as **live line charts** (15m and 1h move every 10 seconds; 4h, 1d, 7d per minute), anomaly times shaded, a red edge on a panel with an open anomaly, badges "● 2 open · ● 1 needs a reason" on each dashboard. Click a panel for its own page (all lines, a sortable legend with newest values); click a line for its **metric page**: graph and details on top, its anomalies of the kept days below, each with **its own reason** (or **Same reason for all** lines of that anomaly). Business-as-usual (BAU) lines — unrecognised (`general`) metrics in any direction, errors going down — need no reason and close by themselves when calm. The header's counter "● 3 open · 2 need a reason" lists those metrics. 🔔 and 🔊 switch on a desktop notification and a sound for new anomalies. **Settings** manages regions, keys and dashboards (see *Change settings*). Charts exist only for panels near the screen and live values are sent only for those, so 20+ dashboards per region stay light |
+| http://localhost:8104 | **Live dashboards that look and work like Datadog's**: a slim left bar (one entry per region, Settings, and the counter "● 3 open · 2 need a reason"); per region a searchable **dashboard list** with badges; each **dashboard laid out from its exported JSON** (the 12-column grid with each widget's position and size, coloured group boxes; dashboards without positions flow in order), template variables as chips, a **time picker** (Past 15 Minutes, 30 Minutes, 1, 3, 6, 12 Hours, 1 Day) with Datadog's **auto interval** (10 s … 5 m, at most 300 points; average, or sum for counts) and live updates at every range (❚❚ pauses). Widgets are drawn by type: timeseries as lines, bars or areas with their palette, query values as big numbers with their colours, top lists, tables, sunbursts, split groups, notes; widgets without metrics show "not collected". Hovering a graph shows the same moment on every graph; **⤢** opens a widget full screen with a min/max/avg/value table; clicking a line or a red anomaly band opens its **side panel** with details, its anomalies of the last 24 hours and the reason box (per line, or the same reason for every line of the anomaly). BAU and past ("found in backfill") anomalies are grey and need no reason. 🔔 and 🔊 notify new anomalies. Light or dark follows the computer. Charts exist only near the screen and live values are sent only for those |
 | `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
@@ -209,35 +209,35 @@ change it). Also since 18 Nov 2026: regions live in `regions.yml`. Nothing to do
 the Settings tab moves `sources:` out of `collector.yml` in its own commit, comments kept. The Collector now reads
 its keys from `.env` itself (start with the new `scripts/system.sh`). A `collector.yml` in the old single-site form
 (`datadog-site` with `dashboards`) is shown read-only in the Settings tab: run `scripts/setup.sh` again to manage
-regions there. Since 18 Nov 2026 (later): everything is kept 10 days — in `store.yml` set `raw-safety-limit: 10d`,
-`summary-retention: 10d`, `history-max-range: 10d`; in `detector.yml` `incident-retention: 10d`; in `reporter.yml`
-`catch-up: 10d` (the Kafka topics are changed by `scripts/system.sh start`). Optional in `collector.yml`:
-`backfill-new-views`, `backfill-window` (defaults 2d and 4h); in `notifier.yml` the dashboard `ranges` gain `10d`.
+regions there. Since 21 Nov 2026: everything is kept 24 hours — in `store.yml` set `raw-safety-limit: 1d`,
+`summary-retention: 1d`, `history-max-range: 1d`; in `detector.yml` `incident-retention: 1d`; in `reporter.yml`
+`catch-up: 1d` (the Kafka topics are changed by `scripts/system.sh start`). Optional: `backfill-new-views: 1d` in
+`collector.yml`; the dashboard `ranges` in `notifier.yml` are 15m, 30m, 1h, 3h, 6h, 12h, 1d by default.
 
 ## Storage stays small
 
-Everything is kept **10 days** (the most any setting allows; lab system) and stored compressed:
+Everything is kept **24 hours** (a setting may go up to 10 days):
 
 | Kept | How long | Stored |
 |---|---|---|
-| Raw 10-second values | 10 days, removed by age (reports remove nothing) | Compressed after 6 hours (TimescaleDB, per line in time order; 4.1× on this machine's small sample) |
-| Per-minute summaries | 10 days | Compressed after 3 days |
-| Incidents and their reasons | 10 days after closing; open and waiting ones until closed | One row each |
-| Kafka messages | 10 days | Compressed by the producers (zstd) |
+| Raw 10-second values | 24 hours, removed by age (reports remove nothing) | Compressed after 6 hours (TimescaleDB, per line in time order) |
+| Per-minute summaries | 24 hours | |
+| Incidents and their reasons | 24 hours after closing; open and waiting ones until closed (announced again every 12 hours and at every Detector start, so they survive Kafka's 24 hours) | One row each |
+| Kafka messages | 24 hours | Compressed by the producers (zstd) |
 | Reports | The last 30 files | |
 
-The Store's health shows each table's size and, once chunks are compressed, its size before and after compression
-("compressed"); it turns **DEGRADED** above 1 GB, so a stopped clean-up is noticed.
+The Store's health shows each table's size and, once chunks are compressed, its size before and after; it turns
+**DEGRADED** above 10 GB.
 
-## A new dashboard starts with its last 2 days
+## A new dashboard starts with its last 24 hours
 
 When a dashboard (or a saved view) is watched for the first time, at first-time setup or when added in the Settings
-tab, the Collector first pulls its **last 2 days at 10-second detail** from Datadog (read-only), 4 hours per call,
+tab, the Collector first pulls its **last 24 hours at 10-second detail** from Datadog (read-only), 4 hours per call,
 oldest first, through the region's own rate limit; then its live polling starts. The Settings tab shows "Pulling the
-last 2 days of Shop: 45%". Anomalies inside those 2 days are found and listed on the metric pages as **past · found
-in backfill**: closed, no notification, no reason needed; one still going on when the 2 days end continues as live.
+last 2 days of Shop: 45%". Anomalies inside those hours are found and listed on the metric pages as **past · found
+in backfill**: closed, no notification, no reason needed; one still going on when they end continues as live.
 A restart or an edit never pulls them again (the Store remembers which views it has). Settings in `collector.yml`:
-`backfill-new-views: 2d` (0s = off, at most 10d), `backfill-window: 4h`.
+`backfill-new-views: 1d` (0s = off, at most 10d), `backfill-window: 4h`.
 
 ## Without Datadog (replay)
 
@@ -267,7 +267,7 @@ PLATFORM_DB_PASSWORD=... ./mvnw test -Dlive.db=true   # also the database tests 
 | Collector health: open breakers for one source | That site is down or refuses those panels; the other sources keep their timing |
 | The page says "reconnecting" | `scripts/system.sh status`; `run/notifier.log` |
 | A setting did not change | `curl localhost:810x/actuator/settings`: `lastRejected` says why |
-| Store health DEGRADED | Database over 1 GB: is the Reporter running? (`localhost:8105/actuator/health`) |
+| Store health DEGRADED | Database over 10 GB: is the Reporter running? (`localhost:8105/actuator/health`) |
 
 ## Layout
 

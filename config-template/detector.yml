@@ -23,7 +23,7 @@ anomaly:
     silence-skip-signals: [errors, error-rate]   # an error line that stops reporting is good news
     group-by: [api, upstream_service, peer.rpc.service, service, resource_name]   # first tag a line has; else its dashboard
     upstream-tags: [upstream_service, peer.rpc.service]
-    incident-retention: 10d                 # closed incidents kept, with their reasons (at most 10d)
+    incident-retention: 1d                  # closed incidents kept, with their reasons (at most 10d); waiting ones until closed
     store-address: localhost:9102           # the Store's gRPC (history for a warm start)
 
     # First match wins: put narrow rules (rates, errors) before broad ones (traffic).

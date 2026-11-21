@@ -29,5 +29,6 @@ class PanelOrderTest {
         }
         assertThat(vs.get(0).panelIndex()).isEqualTo(1);
         assertThat(vs.get(0).groupIndex()).isEqualTo(1);
+        assertThat(vs).as("each view names its widget (add-datadog-look K1)").allSatisfy(v -> assertThat(v.widgetId()).isPositive());
     }
 }

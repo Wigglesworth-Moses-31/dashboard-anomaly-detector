@@ -5,26 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Live dashboards</title>
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="look.css">
   <script src="vendor/echarts.min.js"></script>
   <script type="module" src="app.js"></script>
   <script type="module" src="settings.js"></script>
 </head>
 <body>
-  <header class="top">
-    <div class="brand"><span class="dot-logo"></span>Live dashboards</div>
-    <nav class="tabs" id="tabs" aria-label="Regions">
-      <a href="#settings" id="tabSettings" class="tab">Settings</a>
-    </nav>
-    <button id="attention" class="attention" type="button" aria-expanded="false">● 0 open · 0 need a reason</button>
-    <div class="conn" id="conn"><span class="pill" id="connPill">connecting</span><span id="lastChange" class="muted"></span></div>
-    <div class="toggles">
+  <nav class="leftnav" aria-label="Navigation">
+    <a class="brand" href="#" title="Live dashboards"><span class="dot-logo"></span></a>
+    <div id="regionNav" class="nav-group"></div>
+    <a href="#settings" id="tabSettings" class="nav-item" title="Settings"><span class="nav-icon">⚙</span><span class="nav-label">Settings</span></a>
+    <div class="nav-spacer"></div>
+    <button id="attention" class="attention" type="button" aria-expanded="false" title="Open anomalies and ones that need a reason">● 0 · 0</button>
+    <div class="nav-foot">
+      <span class="pill" id="connPill" title="Live connection">connecting</span>
+      <span id="lastChange" class="muted"></span>
       <button id="notifyBtn" class="toggle" title="Desktop notification when a new anomaly opens">🔔 off</button>
       <button id="soundBtn" class="toggle" title="Short sound when a new anomaly opens">🔊 off</button>
     </div>
-  </header>
+  </nav>
   <div id="attentionList" class="attention-list" hidden></div>
-  <main id="incidentsView"></main>
-  <main id="settingsView" hidden>
+  <main id="incidentsView" class="dd-main"></main>
+  <main id="settingsView" class="dd-main" hidden>
     <section>
       <h2>Regions <span class="count" id="sCount"></span></h2>
       <p class="muted">Datadog regions to watch (at most two: US and EU) and their dashboards. Every change is one commit in

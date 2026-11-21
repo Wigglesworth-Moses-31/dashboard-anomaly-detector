@@ -7,7 +7,7 @@ import org.springframework.util.unit.DataSize;
 
 /**
  * The Store's settings (config-repo/store.yml, prefix {@code anomaly.store}). Immutable.
- * Lab system, never production (user, 15 Nov 2026): nothing may be kept longer than 10 days (user, 18 Nov 2026), the default.
+ * Lab system, never production (user, 15 Nov 2026): nothing may be kept longer than 10 days; the default is 24 hours (user, 21 Nov 2026).
  */
 public record StoreSettings(
         int grpcPort,

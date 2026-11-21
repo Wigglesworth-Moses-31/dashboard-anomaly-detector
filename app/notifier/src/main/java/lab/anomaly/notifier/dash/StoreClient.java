@@ -25,6 +25,11 @@ public class StoreClient implements AutoCloseable {
         List<SeriesDescriptor> listSeries();
 
         Map<String, List<Point>> history(List<String> ids, long fromMs, long toMs, boolean raw);
+
+        /** Rolled up in the Store to {@code intervalMs} with {@code method} (add-datadog-look K8). */
+        default Map<String, List<Point>> history(List<String> ids, long fromMs, long toMs, long intervalMs, lab.anomaly.contracts.v1.Rollup method) {
+            return history(ids, fromMs, toMs, true);
+        }
     }
 
     private ManagedChannel channel;
@@ -52,6 +57,22 @@ public class StoreClient implements AutoCloseable {
                 List<SeriesDescriptor> out = new ArrayList<>();
                 stub(storeAddress.get()).withDeadlineAfter(30, TimeUnit.SECONDS).listSeries(ListSeriesRequest.getDefaultInstance())
                         .forEachRemaining(out::add);
+                return out;
+            }
+
+            @Override
+            public Map<String, List<Point>> history(List<String> ids, long fromMs, long toMs, long intervalMs, lab.anomaly.contracts.v1.Rollup method) {
+                long start = System.nanoTime();
+                Map<String, List<Point>> out = new HashMap<>();
+                for (int i = 0; i < ids.size(); i += 1000) {
+                    Iterator<HistoryChunk> it = stub(storeAddress.get()).withDeadlineAfter(30, TimeUnit.SECONDS)
+                            .getHistoryBatch(HistoryBatchRequest.newBuilder().addAllSeriesIds(ids.subList(i, Math.min(ids.size(), i + 1000)))
+                                    .setFromMs(fromMs).setToMs(toMs).setResolution(Resolution.RESOLUTION_RAW)
+                                    .setIntervalMs(intervalMs).setMethod(method).build());
+                    it.forEachRemaining(c -> out.computeIfAbsent(c.getSeriesId(), k -> new ArrayList<>()).addAll(c.getPointsList()));
+                }
+                calls.incrementAndGet();
+                slowestMs.accumulateAndGet((System.nanoTime() - start) / 1_000_000, Math::max);
                 return out;
             }
 

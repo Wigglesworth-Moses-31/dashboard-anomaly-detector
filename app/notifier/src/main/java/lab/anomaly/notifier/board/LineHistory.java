@@ -24,7 +24,7 @@ import lab.anomaly.contracts.v1.Incident;
  */
 public final class LineHistory {
 
-    public static final long WINDOW_MS = 10 * 24 * 3_600_000L;        // keep-ten-days T4
+    public static final long WINDOW_MS = 24 * 3_600_000L;              // keep-one-day
     /** At most this many incidents per line are remembered, the oldest dropped first: memory stays bounded. */
     public static final int MAX_PER_LINE = 200;
 

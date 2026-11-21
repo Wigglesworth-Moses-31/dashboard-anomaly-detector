@@ -67,7 +67,8 @@ public final class DatadogDashboardReader {
             for (JsonNode request : requestsOf(requestsHolder)) {
                 Panel panel = panelOf(request, title, visit.path());
                 if (panel != null) {
-                    panels.add(panel);
+                    long widgetId = visit.widget().path("id").asLong(0);   // add-datadog-look K1: exact placement
+                    panels.add(widgetId == 0 ? panel : new Panel(panel.title(), panel.path(), panel.queries(), panel.formulas(), widgetId));
                     found = true;
                 }
             }

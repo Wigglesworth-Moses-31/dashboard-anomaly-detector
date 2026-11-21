@@ -111,10 +111,11 @@ public class DashController implements HealthIndicator {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("from", to - d.toMillis());
         out.put("to", to);
-        out.put("per_minute", d.compareTo(Duration.ofHours(1)) > 0);
+        long interval = DashService.autoInterval(d);                      // add-datadog-look K8: like Datadog
+        out.put("interval_ms", interval);
         try {
             Map<String, List<double[]>> lines = new LinkedHashMap<>();
-            dash.range(ids, d, to, width).forEach(s -> lines.put(s.id(), s.points()));
+            dash.rolled(ids, d, to, interval).forEach(s -> lines.put(s.id(), s.points()));
             out.put("lines", lines);
             return ResponseEntity.ok(out);
         } catch (RuntimeException e) {

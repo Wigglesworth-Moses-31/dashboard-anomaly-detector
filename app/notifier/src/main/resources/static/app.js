@@ -1,7 +1,8 @@
-// The live dashboards (add-dashboard-view D5): one page per region with its dashboards (collapsible, Datadog's group
-// order, live line charts), a page per panel and a page per metric (graph and details on top, its anomalies below).
-// Anomalies arrive on the incident stream (RSocket); values come from /dash/* (one Store call per dashboard) and, for
-// the panels on screen only, from /dash/live. Charts exist only for panels near the screen (IntersectionObserver).
+// The live dashboards, looking and working like Datadog's (add-datadog-look): a left navigation, each region's
+// dashboard list, each dashboard laid out from its exported JSON on a 12-column grid with its widget types, a shared
+// crosshair, full-screen widgets and a side panel per metric with its anomalies and reasons. Values come from
+// /dash/* at the range's auto interval (one Store call per dashboard and method); 10-second ranges also take live
+// values (SSE) for the charts that exist, longer ones re-ask every interval. Charts exist only near the screen.
 "use strict";
 import { openStream } from "./rsocket.js";
 
@@ -80,7 +81,7 @@ function change(s) {
 const tagsText = (tags) => Object.entries(tags || {}).map(([k, v]) => k + "=" + v).join(", ");
 
 // ---- state ----------------------------------------------------------------------------------------------------
-let catalogue = { sites: [], ranges: ["15m", "1h", "4h", "1d", "7d"], lines_per_panel: 20 };
+let catalogue = { sites: [], ranges: ["15m", "30m", "1h", "3h", "6h", "12h", "1d"], lines_per_panel: 20 };
 let regions = [];                       // [{name, site}] from /settings/state
 const lineInfo = new Map();             // line id -> {line, places: [{site, dashboard, group, panelId, panel}]}
 const panelById = new Map();            // panel id -> {panel, dashboard, group, site}
@@ -89,7 +90,6 @@ const incidents = new Map();            // incident id -> latest Incident (JSON)
 const linesOfIncident = new Map();      // incident id -> [line ids]
 const incidentsOfLine = new Map();      // line id -> Set(incident id)
 let range = store.get("dash-range") || "1h";
-const LIVE_RANGES = new Set(["15m", "1h"]);
 const rangeMs = (r) => { const n = parseInt(r, 10); return n * ({ m: 60e3, h: 3600e3, d: 86400e3 })[r.slice(-1)]; };
 
 async function getJson(url, opts) {
@@ -103,8 +103,8 @@ async function loadCatalogue() {
   try {
     const [c, s] = await Promise.all([getJson("/dash/catalogue"), getJson("/settings/state").catch(() => null)]);
     catalogue = c;
-    regions = s ? (s.regions || []).map((r) => ({ name: r.name, site: r.site })) : [];
-    if (s && s.old && s.old.site && !regions.length) regions = [{ name: "default", site: s.old.site }];
+    regions = s ? (s.regions || []).map((r) => ({ name: r.name, site: r.site, dashboards: r.dashboards || [] })) : [];
+    if (s && s.old && s.old.site && !regions.length) regions = [{ name: "default", site: s.old.site, dashboards: [] }];
     if (!catalogue.ranges.includes(range)) range = catalogue.ranges[1] || catalogue.ranges[0];
     lineInfo.clear(); panelById.clear(); dashById.clear();
     for (const site of catalogue.sites) {
@@ -123,27 +123,7 @@ async function loadCatalogue() {
       }
     }
   } catch (e) { catalogue.problem = e.message; }
-  drawTabs();
-}
-
-function siteTabs() {
-  const seen = new Map();
-  for (const r of regions) seen.set(r.site, r.name.toUpperCase());
-  for (const s of catalogue.sites) if (!seen.has(s.site)) seen.set(s.site, s.label || s.site);
-  return [...seen.entries()].map(([site, label]) => ({ site, label }));
-}
-
-function drawTabs() {
-  const nav = $("tabs");
-  [...nav.querySelectorAll(".region-tab")].forEach((a) => a.remove());
-  const route = parseRoute();
-  const site = route.site || (route.panel && panelById.get(route.panel)?.site) || (route.line && lineInfo.get(route.line)?.places[0]?.site);
-  for (const t of siteTabs()) {
-    const a = el("a", "tab region-tab", t.label);
-    a.href = "#/region/" + encodeURIComponent(t.site);
-    a.classList.toggle("active", site === t.site);
-    nav.insertBefore(a, $("tabSettings"));
-  }
+  drawNav();
 }
 
 // ---- anomalies (the incident stream) ---------------------------------------------------------------------------
@@ -212,7 +192,7 @@ function fillAttentionList(open, waiting) {
       const info = lineInfo.get(id);
       const since = Math.min(...[...(incidentsOfLine.get(id) || [])].map((i) => Number(incidents.get(i)?.started_ms || Infinity)));
       const a = el("a", "al-item");
-      a.href = "#/metric/" + id;
+      a.href = where ? "#/dashboard/" + encodeURIComponent(where.dashboard.id) + "?line=" + id : "#";
       const where = info ? info.places[0] : null;
       a.append(el("span", "al-where", where ? (siteName(where.site) + " · " + where.dashboard.title + " › " + where.panel.title) : id),
         el("span", "al-tags", info ? (tagsText(info.line.tags) || info.line.metric) : ""),
@@ -224,7 +204,6 @@ function fillAttentionList(open, waiting) {
   section("Open", open, "hot");
   section("Needs a reason", waiting, "warm");
 }
-const siteName = (site) => (siteTabs().find((t) => t.site === site) || { label: site }).label;
 
 // ---- the stream: snapshot, then live changes; newest sequence wins ---------------------------------------------
 let staging = null, caughtUp = false, lastChangeAt = 0;
@@ -304,60 +283,75 @@ async function connect() {
 function setConn(state, reason) { const p = $("connPill"); p.textContent = state; p.className = "pill " + state; p.title = reason || ""; }
 setInterval(() => { $("lastChange").textContent = lastChangeAt ? "last change " + duration(Date.now() - lastChangeAt) + " ago" : ""; }, 1000);
 
-// ---- charts: created near the screen, released far from it; live values for created charts only -----------------
-const charts = new Map();             // chart element -> {chart, lines: [ids], panelId, kind}
-const series = new Map();             // line id -> [[t, v], ...] for the current range (shared by every chart of the line)
-let seriesRange = "";
+
+// ---- charts: created near the screen, released far from it (add-dashboard-view D5) -----------------------------------
+const charts = new Map();             // chart element -> {chart, spec}
+const series = new Map();             // line id -> [[t, v], ...] at the dashboard's interval (shared by every widget of the line)
+let intervalMs = 20000;               // the auto interval of the shown range (add-datadog-look K8)
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
-const PALETTE = ["#2f6fe0", "#d98a00", "#1f9d55", "#7a4fd6", "#d93a3a", "#0e9aa7", "#b5487d", "#6b7385", "#8c6d1f", "#3e8e41"];
+// Palettes named like the dashboard JSON's (values are our own approximations)
+const PALETTES = {
+  dog_classic: ["#3c77c6", "#6aa84f", "#e6a23c", "#d4544b", "#8e6bbf", "#3fa7a5", "#d07c3a", "#8a8f98", "#b25d8c", "#5b8f3a"],
+  classic: ["#3c77c6", "#6aa84f", "#e6a23c", "#d4544b", "#8e6bbf", "#3fa7a5", "#d07c3a", "#8a8f98", "#b25d8c", "#5b8f3a"],
+  cool: ["#1f5fa8", "#2f87c8", "#3fa7a5", "#58b8d8", "#7aa6e8", "#4c6fc4", "#2c9a8c", "#6bc0e0"],
+  warm: ["#d4544b", "#e6743c", "#e6a23c", "#c9483f", "#f0c060", "#b8432e", "#e88a5a", "#d06a2c"],
+  purple: ["#6a3fb0", "#8e6bbf", "#a988d6", "#5a3196", "#c3a8e8", "#7b55b5"],
+  orange: ["#d07c3a", "#e6943c", "#f0b060", "#b8642a", "#f5c88a", "#c86f2a"],
+  gray: ["#5f6670", "#8a8f98", "#adb2ba", "#4a5058", "#c7cbd1", "#757b84"],
+  green: ["#3d8b3d", "#6aa84f", "#8fc46f", "#2f6f2f", "#b3dc93"],
+  red: ["#c0392b", "#d4544b", "#e57a72", "#a12f24", "#f0a09a"],
+  blue: ["#1f5fa8", "#3c77c6", "#6b9bd8", "#174a85", "#9cbde8"],
+};
+const palette = (name) => PALETTES[name] || PALETTES.dog_classic;
 
 const near = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) createChart(e.target); }, { rootMargin: "300px" });
 const far = new IntersectionObserver((entries) => { for (const e of entries) if (!e.isIntersecting) releaseChart(e.target); }, { rootMargin: "2000px" });
+function watchChart(box, spec) { box._spec = spec; near.observe(box); far.observe(box); }
+function unwatchAll(root) { for (const box of root.querySelectorAll(".chart")) { near.unobserve(box); far.unobserve(box); releaseChart(box); } }
 
-function watchChart(box, lines, panelId, kind) {
-  box._spec = { lines, panelId, kind };
-  near.observe(box); far.observe(box);
-}
-function unwatchAll(root) {
-  for (const box of root.querySelectorAll(".chart")) { near.unobserve(box); far.unobserve(box); releaseChart(box); }
-}
+function axisColors() { return dark() ? { axis: "#8d95a6", grid: "#2a2f3a" } : { axis: "#6b7385", grid: "#eceef2" }; }
 
+/** A timeseries widget (lines, bars or areas), or a full-screen / side-panel graph. */
+function timeseriesOption(spec) {
+  const now = Date.now(), from = now - rangeMs(range);
+  const lines = spec.kind === "small" ? topLines(spec.lines, catalogue.lines_per_panel || 20) : spec.lines;
+  const unit = lineInfo.get(lines[0])?.line.unit;
+  const pal = palette(spec.palette);
+  const areas = shadingFor(spec.lines, from);
+  const display = spec.display || "line";
+  const s = lines.map((id, i) => {
+    const info = lineInfo.get(id);
+    return {
+      id, name: info ? (tagsText(info.line.tags) || info.line.metric) : id, type: display === "bars" ? "bar" : "line",
+      showSymbol: false, data: series.get(id) || [], color: pal[i % pal.length], animation: false, barMaxWidth: 8,
+      stack: display === "bars" || display === "area" ? "s" : undefined,
+      areaStyle: display === "area" ? { opacity: 0.35 } : undefined,
+      lineStyle: { width: spec.kind === "metric" ? 2 : 1.25 }, emphasis: { focus: "series" },
+      markArea: i === 0 && areas.length ? { silent: false, data: areas, label: { show: false } } : undefined,
+    };
+  });
+  const c = axisColors();
+  const legend = spec.kind !== "small" || spec.showLegend === false ? undefined
+    : { show: spec.showLegend === true && lines.length <= 8, bottom: 0, type: "scroll", textStyle: { color: c.axis, fontSize: 10 }, itemHeight: 6, itemWidth: 10 };
+  return {
+    animation: false, useUTC: true,
+    grid: { left: 52, right: 10, top: 8, bottom: legend && legend.show ? 40 : 22 },
+    tooltip: { trigger: "axis", confine: true, order: "valueDesc", valueFormatter: (v) => withUnit(v, unit), axisPointer: { type: "line", lineStyle: { color: c.axis } } },
+    legend,
+    xAxis: { type: "time", min: from, max: now, axisLabel: { color: c.axis, hideOverlap: true, fontSize: 10 }, axisLine: { lineStyle: { color: c.grid } }, splitLine: { show: false } },
+    yAxis: { type: "value", scale: spec.yScale !== "zero", min: spec.yMin, max: spec.yMax,
+      axisLabel: { color: c.axis, fontSize: 10, formatter: (v) => withUnit(v, unit) }, splitLine: { lineStyle: { color: c.grid } } },
+    series: s,
+  };
+}
 function topLines(lines, n) {
   if (lines.length <= n) return lines;
   const peak = (id) => { let m = -Infinity; for (const p of series.get(id) || []) if (p[1] > m) m = p[1]; return m; };
   return [...lines].sort((a, b) => peak(b) - peak(a)).slice(0, n);
 }
+const lastValue = (id) => { const s = series.get(id) || []; return s.length ? s[s.length - 1][1] : null; };
 
-function chartOption(spec) {
-  const shown = spec.kind === "small" ? topLines(spec.lines, catalogue.lines_per_panel || 20) : spec.lines;
-  const unit = lineInfo.get(shown[0])?.line.unit;
-  const now = Date.now(), from = now - rangeMs(range);
-  const areas = shadingFor(spec.lines, from);
-  const s = shown.map((id, i) => {
-    const info = lineInfo.get(id);
-    return {
-      id, name: info ? (tagsText(info.line.tags) || info.line.metric) : id, type: "line", showSymbol: false, smooth: false,
-      data: series.get(id) || [], lineStyle: { width: spec.kind === "metric" ? 2 : 1.2 }, color: PALETTE[i % PALETTE.length],
-      emphasis: { focus: "series" }, animation: false,
-      markArea: i === 0 && areas.length ? { silent: false, data: areas, label: { show: false } } : undefined,
-    };
-  });
-  const axis = dark() ? "#8d95a6" : "#6b7385", grid = dark() ? "#2a303b" : "#eceff4";
-  return {
-    animation: false, useUTC: true,
-    grid: { left: 62, right: 12, top: 10, bottom: spec.kind === "small" ? 22 : 28 },
-    tooltip: { trigger: "axis", confine: true, order: "valueDesc", valueFormatter: (v) => withUnit(v, unit),
-      axisPointer: { type: "line" }, appendToBody: false },
-    xAxis: { type: "time", min: from, max: now, axisLabel: { color: axis, hideOverlap: true }, axisLine: { lineStyle: { color: grid } }, splitLine: { show: false } },
-    yAxis: { type: "value", scale: true, axisLabel: { color: axis, formatter: (v) => withUnit(v, unit) }, splitLine: { lineStyle: { color: grid } } },
-    series: s,
-  };
-}
-
-/**
- * Shaded times of the anomalies on these lines: red where one is open or waiting, grey for BAU and closed ones.
- * Overlapping times are merged (sorted sweep, O(n log n)), so many anomalies never stack into a solid block.
- */
+/** Shaded anomaly times: red where open or waiting, grey for past, BAU and closed; overlaps merged. */
 function shadingFor(lines, from) {
   const spans = { live: [], past: [] }, seen = new Set(), names = { live: [], past: [] };
   for (const l of lines) {
@@ -373,40 +367,65 @@ function shadingFor(lines, from) {
   }
   const out = [];
   for (const kind of ["past", "live"]) {
-    const s = spans[kind].sort((a, b) => a[0] - b[0]);
-    const merged = [];
+    const s = spans[kind].sort((a, b) => a[0] - b[0]), merged = [];
     for (const x of s) { const last = merged[merged.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else merged.push([x[0], x[1]]); }
     const label = names[kind].length === 1 ? names[kind][0] : names[kind].length + " anomalies";
-    for (const [a, b] of merged) out.push([{ name: label, xAxis: a, itemStyle: { color: kind === "live" ? "rgba(217,58,58,0.10)" : "rgba(138,145,158,0.12)" } }, { xAxis: b }]);
+    for (const [a, b] of merged) out.push([{ name: label, xAxis: a, itemStyle: { color: kind === "live" ? "rgba(217,58,58,0.12)" : "rgba(138,145,158,0.14)" } }, { xAxis: b }]);
   }
   return out;
 }
 
 function createChart(box) {
   if (charts.has(box) || !box.isConnected || !box._spec) return;
+  const spec = box._spec;
   const chart = echarts.init(box, null, { renderer: "canvas" });
-  chart.setOption(chartOption(box._spec));
-  charts.set(box, Object.assign({ chart }, box._spec));
-  chart.on("click", (p) => { if (p.seriesId && box._spec.kind !== "metric") location.hash = "#/metric/" + p.seriesId; });
+  if (!box._hoverWired) {                       // like Datadog: the tooltip only on the graph under the pointer
+    box.addEventListener("mouseenter", () => box.classList.add("hovering"));
+    box.addEventListener("mouseleave", () => box.classList.remove("hovering"));
+    box._hoverWired = true;
+  }
+  if (spec.kind === "small" || spec.kind === "split") {                               // shared crosshair (K5)
+    chart.group = "dash";
+    if (!window.__ddConnected) { echarts.connect("dash"); window.__ddConnected = true; }
+  }
+  chart.setOption(spec.option ? spec.option() : timeseriesOption(spec));
+  charts.set(box, { chart, spec });
+  chart.on("click", (p) => { const id = p.seriesId || (p.componentType === "markArea" && spec.lines[0]); if (id && lineInfo.has(id)) openLine(id); });
   liveChanged();
 }
-function releaseChart(box) {
-  const c = charts.get(box);
-  if (!c) return;
-  c.chart.dispose(); charts.delete(box); liveChanged();
-}
+function releaseChart(box) { const c = charts.get(box); if (!c) return; c.chart.dispose(); charts.delete(box); liveChanged(); }
 function redraw(filter) {
-  for (const [box, c] of charts) if (!filter || c.lines.some((l) => filter.has(l))) c.chart.setOption(chartOption(c), { replaceMerge: ["series"] });
+  for (const [box, c] of charts) if (!filter || c.spec.lines.some((l) => filter.has(l))) c.chart.setOption(c.spec.option ? c.spec.option() : timeseriesOption(c.spec), { replaceMerge: ["series"] });
+  for (const w of document.querySelectorAll("[data-values]")) if (!filter || w._lines.some((l) => filter.has(l))) w._draw();
 }
 function refreshShading() { redraw(null); }
-window.addEventListener("resize", () => { for (const c of charts.values()) c.chart.resize(); });
+window.addEventListener("resize", () => { for (const c of charts.values()) c.chart.resize(); sizeGrid(); });
 
-// live: one EventSource for the lines of the charts that exist (re-opened, debounced, when that set changes)
-let liveSource = null, liveKey = "", liveTimer = 0;
+// ---- time: picker, auto interval, live at every range with pause (K8) ---------------------------------------------------
+let paused = store.get("dash-paused") === "1";
+const RANGE_LABEL = { "15m": "Past 15 Minutes", "30m": "Past 30 Minutes", "1h": "Past 1 Hour", "3h": "Past 3 Hours", "6h": "Past 6 Hours", "12h": "Past 12 Hours", "1d": "Past 1 Day" };
+const autoInterval = (r) => { for (const i of [10e3, 20e3, 30e3, 60e3, 120e3, 300e3, 600e3]) if (rangeMs(r) / i <= 300) return i; return 600e3; };
+const intervalText = (ms) => ms < 60e3 ? ms / 1000 + "s" : ms / 60e3 + "m";
+
+function timeBar(onChange) {
+  const box = el("div", "timebar");
+  const sel = el("select", "time-select");
+  for (const r of catalogue.ranges) { const o = el("option", null, RANGE_LABEL[r] || r); o.value = r; o.selected = r === range; sel.append(o); }
+  sel.addEventListener("change", () => { range = sel.value; store.set("dash-range", range); onChange(); });
+  const live = el("button", "live-btn" + (paused ? " paused" : ""), paused ? "▶ Paused" : "❚❚ Live");
+  live.type = "button"; live.title = paused ? "Resume live updates" : "Pause live updates";
+  live.addEventListener("click", () => { paused = !paused; store.set("dash-paused", paused ? "1" : "0"); onChange(); });
+  box.append(el("span", "interval-chip", intervalText(autoInterval(range)) + " interval"), sel, live);
+  return box;
+}
+
+// live: 10-second intervals take each new value (SSE); longer ones re-ask the range every interval (at least every 30 s)
+let liveSource = null, liveKey = "", liveTimer = 0, refreshTimer = 0, refreshFn = null;
 function liveChanged() { clearTimeout(liveTimer); liveTimer = setTimeout(openLive, 500); }
 function openLive() {
   const lines = new Set();
-  if (LIVE_RANGES.has(range)) for (const c of charts.values()) c.lines.forEach((l) => lines.add(l));
+  if (!paused && autoInterval(range) <= 10e3) for (const c of charts.values()) c.spec.lines.forEach((l) => lines.add(l));
+  for (const w of document.querySelectorAll("[data-values]")) if (!paused && autoInterval(range) <= 10e3) w._lines.forEach((l) => lines.add(l));
   const key = [...lines].sort().join(",");
   if (key === liveKey) return;
   liveKey = key;
@@ -416,241 +435,480 @@ function openLive() {
   liveSource.addEventListener("points", (e) => {
     const data = JSON.parse(e.data), changed = new Set(), from = Date.now() - rangeMs(range);
     for (const [id, pts] of Object.entries(data)) {
-      const cur = series.get(id) || [];
-      const first = pts.length ? pts[0][0] : Infinity;
-      const kept = cur.filter((p) => p[0] >= from && p[0] < first);       // newer points replace the window they cover
-      series.set(id, kept.concat(pts));
+      const cur = series.get(id) || [], first = pts.length ? pts[0][0] : Infinity;
+      series.set(id, cur.filter((p) => p[0] >= from && p[0] < first).concat(pts));
       changed.add(id);
     }
     if (changed.size) redraw(changed);
   });
 }
+function scheduleRefresh(fn) {
+  clearTimeout(refreshTimer); refreshFn = fn;
+  if (paused || !fn || autoInterval(range) <= 10e3) return;
+  refreshTimer = setTimeout(async () => { try { await fn(); redraw(null); } catch (e) { /* next time */ } scheduleRefresh(fn); }, Math.max(30e3, autoInterval(range)));
+}
 
 async function loadRange(url, lines) {
   const data = await getJson(url);
+  intervalMs = data.interval_ms || autoInterval(range);
   for (const [id, pts] of Object.entries(data.lines || {})) series.set(id, pts);
   for (const l of lines) if (!data.lines || !data.lines[l]) series.set(l, []);
   return data;
 }
 
-// ---- router ------------------------------------------------------------------------------------------------------
+// ---- navigation (K2) -----------------------------------------------------------------------------------------------------
+function siteTabs() {
+  const seen = new Map();
+  for (const r of regions) seen.set(r.site, r.name.toUpperCase());
+  for (const s of catalogue.sites) if (!seen.has(s.site)) seen.set(s.site, s.label || s.site);
+  return [...seen.entries()].map(([site, label]) => ({ site, label }));
+}
+const siteName = (site) => (siteTabs().find((t) => t.site === site) || { label: site }).label;
+function drawNav() {
+  const nav = $("regionNav");
+  nav.textContent = "";
+  const route = parseRoute();
+  const site = route.site || (route.dash && dashById.get(route.dash)?.site);
+  for (const t of siteTabs()) {
+    const a = el("a", "nav-item" + (site === t.site && route.page !== "settings" ? " active" : ""));
+    a.href = "#/dashboards/" + encodeURIComponent(t.site);
+    a.title = "Dashboards in " + t.label + " (" + t.site + ")";
+    a.append(el("span", "nav-icon", t.label.slice(0, 2)), el("span", "nav-label", t.label));
+    nav.append(a);
+  }
+  $("tabSettings").classList.toggle("active", route.page === "settings");
+}
 function parseRoute() {
   const h = location.hash;
-  let m;
-  if ((m = /^#\/region\/(.+)$/.exec(h))) return { page: "region", site: decodeURIComponent(m[1]) };
-  if ((m = /^#\/panel\/([0-9a-f]+)$/.exec(h))) return { page: "panel", panel: m[1] };
-  if ((m = /^#\/metric\/([0-9a-f]+)$/.exec(h))) return { page: "metric", line: m[1] };
   if (h === "#settings") return { page: "settings" };
+  const [path, query] = h.split("?");
+  const q = new URLSearchParams(query || "");
+  let m;
+  if ((m = /^#\/dashboards\/(.+)$/.exec(path))) return { page: "list", site: decodeURIComponent(m[1]) };
+  if ((m = /^#\/dashboard\/(.+)$/.exec(path))) return { page: "dash", dash: decodeURIComponent(m[1]), widget: q.get("widget"), line: q.get("line") };
   return { page: "home" };
 }
+function setQuery(key, value) {
+  const [path, query] = location.hash.split("?");
+  const q = new URLSearchParams(query || "");
+  if (value == null) q.delete(key); else q.set(key, value);
+  const s = q.toString();
+  location.hash = path + (s ? "?" + s : "");
+}
+function openLine(id) { setQuery("line", id); }
+
 let current = null;
 async function route() {
   const r = parseRoute();
-  if (r.page === "settings") { leave(); drawTabs(); return; }
-  if (r.page === "home") { const first = siteTabs()[0]; if (first) { location.replace("#/region/" + encodeURIComponent(first.site)); return; } }
+  drawNav();
+  if (r.page === "settings") { leave(); return; }
+  if (r.page === "home") { const first = siteTabs()[0]; if (first) { location.replace("#/dashboards/" + encodeURIComponent(first.site)); return; } }
+  // the same dashboard with another overlay: only the overlays change
+  if (current && r.page === "dash" && current.page === "dash" && current.dash === r.dash) { current = r; drawOverlays(); return; }
   leave();
-  drawTabs();
   const main = $("incidentsView");
   main.textContent = "";
   current = r;
-  if (r.page === "region") drawRegion(main, r.site);
-  else if (r.page === "panel") drawPanel(main, r.panel);
-  else if (r.page === "metric") drawMetric(main, r.line);
+  if (r.page === "list") drawList(main, r.site);
+  else if (r.page === "dash") { await drawDashboard(main, r.dash); drawOverlays(); }
   else main.append(el("div", "empty", catalogue.problem ? "Dashboards unavailable: " + catalogue.problem : "No dashboards yet: add a region and its dashboards in Settings."));
 }
-function leave() { unwatchAll($("incidentsView")); series.clear(); seriesRange = ""; liveChanged(); current = null; }
+function leave() { unwatchAll(document); series.clear(); liveChanged(); scheduleRefresh(null); closeOverlays(); current = null; }
 window.addEventListener("hashchange", route);
 
-function rangePicker(onChange) {
-  const box = el("div", "range");
-  for (const r of catalogue.ranges) {
-    const b = el("button", "range-btn" + (r === range ? " on" : ""), r + (LIVE_RANGES.has(r) ? " ●" : ""));
-    b.type = "button"; b.title = LIVE_RANGES.has(r) ? "10-second values, live" : "per-minute values";
-    b.addEventListener("click", () => { range = r; store.set("dash-range", r); onChange(); });
-    box.append(b);
-  }
-  box.append(el("span", "muted range-note", "Each 10-second step shows its highest value, so peaks can be higher than on Datadog's own graphs."));
-  return box;
-}
-function breadcrumb(parts) {
-  const nav = el("nav", "crumbs");
-  parts.forEach((p, i) => {
-    if (i) nav.append(el("span", "crumb-sep", "›"));
-    if (p.href) { const a = el("a", null, p.text); a.href = p.href; nav.append(a); } else nav.append(el("span", "crumb-here", p.text));
-  });
-  return nav;
-}
-
-// ---- the region page -----------------------------------------------------------------------------------------
-function drawRegion(main, site) {
-  const s = catalogue.sites.find((x) => x.site === site);
-  main.append(el("h1", "page-title", siteName(site) + " · " + site));
-  main.append(rangePicker(() => route()));
-  if (!s || !s.dashboards.length) { main.append(el("div", "empty", "No dashboards collected for this region yet.")); return; }
-  for (const d of s.dashboards) main.append(dashboardCard(d));
-}
-
-function dashboardCard(d) {
-  const card = el("section", "dash");
-  card.dataset.dash = d.id;
-  const head = el("button", "dash-head");
-  head.type = "button";
-  const open = store.get("dash-open:" + d.id) === "1";
-  head.setAttribute("aria-expanded", String(open));
-  head.append(el("span", "chev", open ? "▾" : "▸"), el("span", "dash-title", d.title), el("span", "muted", d.panelCount + " panels · " + d.lineCount + " lines"),
-    el("span", "badge hot"), el("span", "badge warm"));
-  const body = el("div", "dash-body");
-  card.append(head, body);
-  head.addEventListener("click", () => {
-    const now = head.getAttribute("aria-expanded") !== "true";
-    store.set("dash-open:" + d.id, now ? "1" : "0");
-    head.setAttribute("aria-expanded", String(now)); head.querySelector(".chev").textContent = now ? "▾" : "▸";
-    if (now) expand(d, body); else { unwatchAll(body); body.textContent = ""; }
-  });
-  badges(card, d);
-  if (open) expand(d, body);
-  return card;
-}
-
+// ---- the dashboard list of a region ---------------------------------------------------------------------------------------
 function dashLines(d) { const out = new Set(); d.groups.forEach((g) => g.panels.forEach((p) => p.lines.forEach((l) => out.add(l.id)))); return out; }
-function badges(card, d) {
-  let open = 0, waiting = 0;
-  for (const l of dashLines(d)) { const st = lineState(l); if (st === "open") open++; else if (st === "waiting") waiting++; }
-  const [hot, warm] = card.querySelectorAll(".dash-head .badge");
-  hot.textContent = open ? "● " + open + " open" : ""; warm.textContent = waiting ? "● " + waiting + " need" + (waiting === 1 ? "s" : "") + " a reason" : "";
-  for (const p of card.querySelectorAll(".panel")) p.classList.toggle("red-edge", p._lines.some((l) => lineState(l) === "open"));
-}
-function refreshBadges() {
-  for (const card of document.querySelectorAll(".dash")) { const d = dashById.get(card.dataset.dash); if (d) badges(card, d.dashboard); }
-}
-
-async function expand(d, body) {
-  body.textContent = "";
-  const status = el("div", "muted", "loading…");
-  body.append(status);
-  try { await loadRange("/dash/range?dashboard=" + encodeURIComponent(d.id) + "&range=" + range + "&width=" + Math.max(200, Math.round(innerWidth / 3)), dashLines(d)); status.remove(); }
-  catch (e) { status.textContent = "history unavailable (" + e.message + "); live values and anomalies still arrive"; status.className = "s-warn"; }
-  for (const g of d.groups) {
-    const gBox = el("div", "group");
-    const gOpen = store.get("group-open:" + d.id + "|" + g.title) !== "0";
-    const gHead = el("button", "group-head", (gOpen ? "▾ " : "▸ ") + (g.title || "Panels") + " (" + g.panels.length + ")");
-    gHead.type = "button";
-    const grid = el("div", "panels");
-    gBox.append(gHead, grid);
-    const fill = () => { for (const p of g.panels) grid.append(panelCard(p)); };
-    gHead.addEventListener("click", () => {
-      const now = grid.childElementCount === 0;
-      store.set("group-open:" + d.id + "|" + g.title, now ? "1" : "0");
-      gHead.textContent = (now ? "▾ " : "▸ ") + (g.title || "Panels") + " (" + g.panels.length + ")";
-      if (now) fill(); else { unwatchAll(grid); grid.textContent = ""; }
-    });
-    if (gOpen) fill();
-    body.append(gBox);
-  }
-  badges(body.closest(".dash"), d);
-}
-
-function panelCard(p) {
-  const box = el("div", "panel");
-  box._lines = p.lines.map((l) => l.id);
-  const head = el("a", "panel-title", p.title);
-  head.href = "#/panel/" + p.id;
-  const chart = el("div", "chart small");
-  box.append(head, chart);
-  const n = catalogue.lines_per_panel || 20;
-  if (p.lines.length > n) { const more = el("a", "muted more", "+ " + (p.lines.length - n) + " more"); more.href = "#/panel/" + p.id; box.append(more); }
-  box.classList.toggle("red-edge", box._lines.some((l) => lineState(l) === "open"));
-  watchChart(chart, box._lines, p.id, "small");
-  return box;
-}
-
-// ---- the panel page ----------------------------------------------------------------------------------------------
-async function drawPanel(main, panelId) {
-  const info = panelById.get(panelId);
-  if (!info) { main.append(el("div", "empty", "This panel is not in the catalogue (yet).")); return; }
-  const { panel, dashboard, group, site } = info;
-  main.append(breadcrumb([{ text: siteName(site), href: "#/region/" + encodeURIComponent(site) }, { text: dashboard.title }, { text: group.title || "Panels" }, { text: panel.title }]));
-  main.append(el("h1", "page-title", panel.title));
-  main.append(rangePicker(() => route()));
-  const chart = el("div", "chart big");
-  main.append(chart);
-  const lines = panel.lines.map((l) => l.id);
-  try { await loadRange("/dash/panel?panel=" + panelId + "&range=" + range + "&width=1000", lines); }
-  catch (e) { main.insertBefore(el("div", "s-warn", "history unavailable (" + e.message + ")"), chart); }
-  if (current?.panel !== panelId) return;
-  watchChart(chart, lines, panelId, "big");
-  const search = el("input", "legend-search"); search.type = "search"; search.placeholder = "filter lines…";
-  const table = el("table", "legend");
-  main.append(search, table);
-  let sortKey = "newest";
-  const newest = (id) => { const s = series.get(id) || []; return s.length ? s[s.length - 1][1] : null; };
-  const peakOf = (id) => { let m = null; for (const p of series.get(id) || []) if (m == null || p[1] > m) m = p[1]; return m; };
+function counts(d) { let open = 0, waiting = 0; for (const l of dashLines(d)) { const st = lineState(l); if (st === "open") open++; else if (st === "waiting") waiting++; } return { open, waiting }; }
+function drawList(main, site) {
+  const s = catalogue.sites.find((x) => x.site === site);
+  const head = el("div", "page-head");
+  head.append(el("h1", "page-title", "Dashboards"), el("span", "muted", siteName(site) + " · " + site));
+  const search = el("input", "list-search"); search.type = "search"; search.placeholder = "Search dashboards";
+  search.value = store.get("dash-search") || "";
+  main.append(head, search);
+  const table = el("div", "dash-list");
+  main.append(table);
   const draw = () => {
+    store.set("dash-search", search.value);
     table.textContent = "";
-    const hr = el("tr");
-    for (const [k, t] of [["name", "Line"], ["state", "State"], ["newest", "Newest"], ["peak", "Peak in range"]]) {
-      const th = el("th", k === sortKey ? "on" : null, t); th.addEventListener("click", () => { sortKey = k; draw(); }); hr.append(th);
-    }
-    table.append(hr);
     const q = search.value.trim().toLowerCase();
-    const rows = panel.lines.filter((l) => !q || (tagsText(l.tags) + " " + l.metric).toLowerCase().includes(q));
-    const val = (l) => sortKey === "name" ? tagsText(l.tags) : sortKey === "state" ? lineState(l.id) : sortKey === "newest" ? newest(l.id) ?? -Infinity : peakOf(l.id) ?? -Infinity;
-    rows.sort((a, b) => sortKey === "name" || sortKey === "state" ? String(val(a)).localeCompare(String(val(b))) : val(b) - val(a));
-    for (const l of rows) {
-      const tr = el("tr");
-      const a = el("a", null, tagsText(l.tags) || l.metric); a.href = "#/metric/" + l.id;
-      const st = lineState(l.id);
-      const td = el("td"); td.append(a);
-      tr.append(td, el("td", "state " + st, st === "open" ? "● open" : st === "waiting" ? "● needs a reason" : st === "bau" ? "BAU" : ""),
-        el("td", "num", withUnit(newest(l.id), l.unit)), el("td", "num", withUnit(peakOf(l.id), l.unit)));
-      table.append(tr);
+    const hr = el("div", "dl-row dl-head"); hr.append(el("span", null, "Name"), el("span", null, "Widgets"), el("span", null, "Anomalies")); table.append(hr);
+    const list = (s ? s.dashboards : []).filter((d) => !q || d.title.toLowerCase().includes(q));
+    for (const d of list) {
+      const a = el("a", "dl-row"); a.href = "#/dashboard/" + encodeURIComponent(d.id); a.dataset.dash = d.id;
+      const c = counts(d), badges = el("span", "dl-badges");
+      if (c.open) badges.append(el("span", "badge hot", "● " + c.open + " open"));
+      if (c.waiting) badges.append(el("span", "badge warm", "● " + c.waiting + " need" + (c.waiting === 1 ? "s" : "") + " a reason"));
+      a.append(el("span", "dl-title", d.title), el("span", "muted", String(d.panelCount)), badges);
+      table.append(a);
     }
+    if (!list.length) table.append(el("div", "empty", q ? "No dashboard matches." : "No dashboards collected for this region yet."));
   };
   search.addEventListener("input", draw);
   draw();
+  main._redrawList = draw;
+}
+function refreshBadges() {
+  const m = $("incidentsView");
+  if (m._redrawList && current?.page === "list") m._redrawList();
+  for (const w of document.querySelectorAll(".widget[data-lines]")) w.classList.toggle("red-edge", w._lines.some((l) => lineState(l) === "open"));
 }
 
-// ---- the metric page -----------------------------------------------------------------------------------------------
-async function drawMetric(main, lineId) {
-  const info = lineInfo.get(lineId);
-  if (!info) { main.append(el("div", "empty", "This metric is not in the catalogue (yet).")); return; }
-  const { line, places } = info;
-  const p0 = places[0];
-  main.append(breadcrumb([{ text: siteName(p0.site), href: "#/region/" + encodeURIComponent(p0.site) }, { text: p0.dashboard.title },
-    { text: p0.group.title || "Panels" }, { text: p0.panel.title, href: "#/panel/" + p0.panel.id }, { text: tagsText(line.tags) || line.metric }]));
-  main.append(el("h1", "page-title", (tagsText(line.tags) || line.metric)));
-  main.append(rangePicker(() => route()));
-  const top = el("div", "metric-top");
-  const chart = el("div", "chart metric");
-  const details = el("dl", "details");
-  top.append(chart, details);
+// ---- the dashboard: JSON layout, widgets, crosshair (K3, K4, K5) ---------------------------------------------------------
+const jsonCache = new Map();          // dashboard id -> {json, entry} | null
+async function dashboardJson(dash) {
+  if (jsonCache.has(dash.id)) return jsonCache.get(dash.id);
+  const viewId = dash.id.slice(dash.id.indexOf("~") + 1), baseId = viewId.split("#")[0];
+  const region = regions.find((r) => r.site === dash.site);
+  let found = null;
+  for (const entry of (region && region.dashboards) || []) {
+    try {
+      const r = await fetch("/settings/files/" + entry.file, { cache: "no-store" });
+      if (!r.ok) continue;
+      const json = await r.json();
+      if (json.id === baseId || json.title === dash.title.split(" · ")[0]) { found = { json, entry }; break; }
+    } catch (e) { /* not this one */ }
+  }
+  jsonCache.set(dash.id, found);
+  return found;
+}
+
+/** JSON widget → catalogue panel: by widget id, else by group and title. */
+function panelFor(dash, widget, groupTitle) {
+  const id = Number(widget.id || 0);
+  const title = (widget.definition && widget.definition.title) || "";
+  let byTitle = null;
+  for (const g of dash.groups) for (const p of g.panels) {
+    if (id && p.widgetId === id) return p;
+    if (!byTitle && p.title === title && (g.title === groupTitle || !groupTitle || !g.title)) byTitle = p;
+  }
+  return byTitle;
+}
+
+let gridUnit = 72;
+function sizeGrid() {
+  const g = document.querySelector(".dd-grid");
+  if (!g) return;
+  gridUnit = Math.max(48, Math.min(96, Math.round(g.clientWidth / 12 * 0.62)));
+  document.documentElement.style.setProperty("--row", gridUnit + "px");
+}
+
+async function drawDashboard(main, dashId) {
+  const info = dashById.get(dashId);
+  if (!info) { main.append(el("div", "empty", "This dashboard is not in the catalogue (yet).")); return; }
+  const dash = info.dashboard;
+  const doc = await dashboardJson(dash);
+  if (current?.dash !== dashId) return;
+  // top bar: title, variables, time
+  const top = el("div", "dash-top");
+  const titleBox = el("div", "dash-title-box");
+  titleBox.append(el("a", "crumb", siteName(info.site) + " dashboards"), el("h1", "page-title", dash.title));
+  titleBox.firstChild.href = "#/dashboards/" + encodeURIComponent(info.site);
+  top.append(titleBox, timeBar(() => route()));
   main.append(top);
-  try { await loadRange("/dash/line?id=" + lineId + "&range=" + range + "&width=1000", [lineId]); }
-  catch (e) { top.insertBefore(el("div", "s-warn", "history unavailable (" + e.message + ")"), chart); }
-  if (current?.line !== lineId) return;
-  watchChart(chart, [lineId], p0.panel.id, "metric");
-  const pts = series.get(lineId) || [];
-  const last = pts.length ? pts[pts.length - 1] : null;
-  const newestIncident = [...(incidentsOfLine.get(lineId) || [])].map((i) => incidents.get(i)).filter(Boolean)
-    .sort((a, b) => Number(b.started_ms) - Number(a.started_ms))[0];
-  const s = newestIncident ? (newestIncident.series || []).find((x) => x.series_id === lineId) : null;
+  const vars = el("div", "var-bar");
+  if (doc) {
+    const preset = dashId.includes("#") ? dashId.slice(dashId.indexOf("#") + 1) : null;
+    const pv = preset ? ((doc.json.template_variable_presets || []).find((p) => p.name === preset) || {}).template_variables || [] : [];
+    for (const v of doc.json.template_variables || []) {
+      const fromFilter = doc.entry.filters && doc.entry.filters[v.name];
+      const fromPreset = pv.find((x) => x.name === v.name);
+      const value = fromFilter || (fromPreset && (fromPreset.values ? fromPreset.values.join(", ") : fromPreset.value)) || (v.defaults && v.defaults.length ? v.defaults.join(", ") : v.default) || "*";
+      const chip = el("span", "var-chip"); chip.append(el("span", "var-name", v.name), el("span", "var-value", value)); vars.append(chip);
+    }
+  }
+  vars.append(el("span", "muted var-note", "Each 10-second value is that step's highest, so averages can be a little above Datadog's own."));
+  main.append(vars);
+  const status = el("div", "muted", "loading…"); main.append(status);
+  const lines = [...dashLines(dash)];
+  const load = () => loadRange("/dash/range?dashboard=" + encodeURIComponent(dash.id) + "&range=" + range, lines);
+  try { await load(); status.remove(); }
+  catch (e) { status.textContent = "history unavailable (" + e.message + "); live values and anomalies still arrive"; status.className = "s-warn"; }
+  if (current?.dash !== dashId) return;
+  const grid = el("div", "dd-grid");
+  main.append(grid);
+  sizeGrid();
+  if (doc) layoutWidgets(grid, doc.json.widgets || [], dash, "", doc.json.layout_type === "free");
+  else for (const g of dash.groups) {                               // no JSON (old form): groups in order, timeseries
+    const box = groupBox({ definition: { title: g.title || "Panels", type: "group" } }, null);
+    for (const p of g.panels) box.inner.append(widgetBox({ id: p.widgetId, definition: { type: "timeseries", title: p.title } }, p, null));
+    grid.append(box.el);
+  }
+  sizeGrid();
+  scheduleRefresh(load);
+  liveChanged();
+}
+
+/** Places widgets on a 12-column grid: positions from the JSON when present, else Datadog-like default sizes in order. */
+function layoutWidgets(grid, widgets, dash, groupTitle) {
+  const hasLayout = widgets.some((w) => w.layout);
+  const items = [...widgets].sort((a, b) => hasLayout && a.layout && b.layout ? (a.layout.y - b.layout.y) || (a.layout.x - b.layout.x) : 0);
+  for (const w of items) {
+    const def = w.definition || {};
+    let node;
+    if (def.type === "group") {
+      const box = groupBox(w, dash);
+      layoutWidgets(box.inner, def.widgets || [], dash, def.title || "");
+      node = box.el;
+    } else node = widgetBox(w, panelFor(dash, w, groupTitle), dash);
+    const L = w.layout || defaultSize(def.type);
+    node.style.gridColumn = (hasLayout && w.layout ? (L.x + 1) + " / span " : "span ") + Math.min(12, L.width);
+    if (def.type !== "group") node.style.height = "calc(var(--row) * " + L.height + " + " + (L.height - 1) * 8 + "px)";
+    grid.append(node);
+  }
+}
+function defaultSize(type) {
+  return ({ group: { width: 12, height: 4 }, query_value: { width: 2, height: 2 }, note: { width: 2, height: 2 }, toplist: { width: 4, height: 2 },
+    query_table: { width: 4, height: 3 }, sunburst: { width: 4, height: 3 }, split_group: { width: 12, height: 3 } })[type] || { width: 4, height: 2 };
+}
+
+const GROUP_COLORS = { vivid_blue: "#3c77c6", blue: "#5b8fd6", vivid_purple: "#7b55b5", purple: "#9a7cc9", vivid_pink: "#c94f8e", pink: "#d98bb4",
+  vivid_orange: "#e07a2c", orange: "#e6a05a", vivid_yellow: "#d9b43a", yellow: "#e8cc6a", vivid_green: "#4c9a4c", green: "#79b979", gray: "#8a8f98", white: "transparent" };
+function groupBox(w, dash) {
+  const def = w.definition || {};
+  const box = el("section", "dd-group");
+  const color = GROUP_COLORS[def.background_color] || "transparent";
+  const head = el("button", "dd-group-head");
+  head.type = "button";
+  const key = "grp:" + (dash ? dash.id : "") + "|" + (def.title || "");
+  const open = store.get(key) !== "0";
+  head.append(el("span", "chev", open ? "▾" : "▸"), el("span", null, def.title || "Group"));
+  head.style.setProperty("--group-color", color);
+  if (def.show_title === false) head.classList.add("quiet");
+  const inner = el("div", "dd-grid dd-inner");
+  inner.hidden = !open;
+  head.addEventListener("click", () => {
+    inner.hidden = !inner.hidden; store.set(key, inner.hidden ? "0" : "1");
+    head.firstChild.textContent = inner.hidden ? "▸" : "▾";
+    if (inner.hidden) unwatchAll(inner); else for (const b of inner.querySelectorAll(".chart")) { near.observe(b); far.observe(b); }
+  });
+  box.append(head, inner);
+  return { el: box, inner };
+}
+
+/** One widget: a frame with its title and menu, and its body drawn by type (K4). */
+function widgetBox(w, panel, dash) {
+  const def = w.definition || {};
+  const type = def.type === "split_group" ? "split_group" : def.type;
+  const box = el("div", "widget w-" + (type || "unknown"));
+  const lines = panel ? panel.lines.map((l) => l.id) : [];
+  box._lines = lines; box.dataset.lines = String(lines.length);
+  const head = el("div", "w-head");
+  const title = def.title || (def.source_widget_definition && def.source_widget_definition.title) || "";
+  head.append(el("span", "w-title", title));
+  if (panel || type === "note") {
+    const full = el("button", "w-menu", "⤢"); full.type = "button"; full.title = "View in full screen";
+    full.addEventListener("click", () => setQuery("widget", String(w.id || panel?.id)));
+    head.append(full);
+  }
+  box.append(head);
+  box._widget = { w, panel, dash };
+  const body = el("div", "w-body");
+  box.append(body);
+  if (type === "note") { body.append(el("div", "w-note", def.content || "")); return box; }
+  if (!panel || !lines.length) { body.append(el("div", "w-missing", panel ? "No data yet" : "not collected by this system")); box.classList.add("missing"); return box; }
+  box.classList.toggle("red-edge", lines.some((l) => lineState(l) === "open"));
+  renderBody(body, type, def, lines, "small");
+  return box;
+}
+
+function requestStyle(def) {
+  const req = Array.isArray(def.requests) ? def.requests[0] || {} : {};
+  return { palette: (req.style && req.style.palette) || "dog_classic", display: req.display_type || "line" };
+}
+
+function renderBody(body, type, def, lines, kind) {
+  if (type === "query_value") return queryValue(body, def, lines);
+  if (type === "toplist") return chartBody(body, lines, () => toplistOption(lines, def));
+  if (type === "query_table") return tableBody(body, def, lines);
+  if (type === "sunburst") return chartBody(body, lines, () => sunburstOption(lines, def));
+  if (type === "split_group") return splitBody(body, def, lines);
+  const st = requestStyle(def);
+  const y = def.yaxis || {};
+  const chart = el("div", "chart");
+  body.append(chart);
+  watchChart(chart, { lines, kind, palette: st.palette, display: st.display, showLegend: def.show_legend !== false && def.legend_layout !== "horizontal" ? undefined : false,
+    yMin: y.min && y.min !== "auto" ? Number(y.min) : undefined, yMax: y.max && y.max !== "auto" ? Number(y.max) : undefined, yScale: y.include_zero ? "zero" : "auto" });
+}
+function chartBody(body, lines, option) { const c = el("div", "chart"); body.append(c); watchChart(c, { lines, kind: "other", option }); }
+
+function queryValue(body, def, lines) {
+  const req = Array.isArray(def.requests) ? def.requests[0] || {} : {};
+  const box = el("div", "qv"); box.dataset.values = "1"; box._lines = lines;
+  const big = el("div", "qv-num"), trend = el("div", "chart qv-trend");
+  box.append(big, trend); body.append(box);
+  const unit = lineInfo.get(lines[0])?.line.unit;
+  box._draw = () => {
+    let v = 0, any = false;
+    for (const l of lines) { const x = lastValue(l); if (x != null) { v += x; any = true; } }   // one number: the lines summed
+    const precision = def.precision != null ? def.precision : 2;
+    let text = "—";
+    if (any) {
+      let n = v, suffix = "";
+      if (def.autoscale !== false) for (const [d, s] of [[1e9, "B"], [1e6, "M"], [1e3, "k"]]) if (Math.abs(v) >= d) { n = v / d; suffix = s; break; }
+      text = n.toFixed(Math.max(0, Math.min(6, precision))) + suffix + (unit === "ms" ? " ms" : unit === "percent" ? "%" : "");
+    }
+    big.textContent = text;
+    let color = "";
+    for (const f of req.conditional_formats || []) {
+      const val = Number(f.value), ok = { ">": v > val, ">=": v >= val, "<": v < val, "<=": v <= val }[f.comparator];
+      if (any && ok) { color = /red/.test(f.palette) ? "var(--red)" : /yellow|orange/.test(f.palette) ? "var(--amber)" : /green/.test(f.palette) ? "var(--green)" : ""; break; }
+    }
+    if (lines.some((l) => lineState(l) === "open")) color = "var(--red)";
+    big.style.color = color;
+  };
+  box._draw();
+  watchChart(trend, { lines, kind: "other", option: () => {
+    const c = axisColors();
+    return { animation: false, grid: { left: 0, right: 0, top: 0, bottom: 0 }, xAxis: { type: "time", show: false }, yAxis: { type: "value", show: false, scale: true },
+      series: [{ type: "line", showSymbol: false, data: sumSeries(lines), lineStyle: { width: 1, color: c.axis }, areaStyle: { opacity: 0.08, color: c.axis } }] };
+  } });
+}
+function sumSeries(lines) {
+  const m = new Map();
+  for (const l of lines) for (const [t, v] of series.get(l) || []) m.set(t, (m.get(t) || 0) + v);
+  return [...m.entries()].sort((a, b) => a[0] - b[0]);
+}
+function toplistOption(lines, def) {
+  const rows = lines.map((l) => [tagsText(lineInfo.get(l)?.line.tags) || lineInfo.get(l)?.line.metric, lastValue(l)]).filter((r) => r[1] != null)
+    .sort((a, b) => b[1] - a[1]).slice(0, 10).reverse();
+  const c = axisColors(), pal = palette(requestStyle(def).palette);
+  return { animation: false, grid: { left: 8, right: 48, top: 4, bottom: 4, containLabel: true },
+    xAxis: { type: "value", show: false }, yAxis: { type: "category", data: rows.map((r) => r[0]), axisLabel: { color: c.axis, fontSize: 10, width: 140, overflow: "truncate" }, axisLine: { show: false }, axisTick: { show: false } },
+    series: [{ type: "bar", data: rows.map((r) => r[1]), itemStyle: { color: pal[0] }, barMaxWidth: 14, label: { show: true, position: "right", color: c.axis, fontSize: 10, formatter: (p) => num(p.value) } }] };
+}
+function sunburstOption(lines, def) {
+  const c = axisColors(), pal = palette(requestStyle(def).palette);
+  const data = lines.map((l) => ({ name: tagsText(lineInfo.get(l)?.line.tags) || lineInfo.get(l)?.line.metric, value: Math.max(0, lastValue(l) || 0) })).filter((d) => d.value > 0);
+  return { animation: false, color: pal, tooltip: { trigger: "item" }, series: [{ type: "pie", radius: ["45%", "75%"], data, label: { color: c.axis, fontSize: 10 } }] };
+}
+function tableBody(body, def, lines) {
+  const wrap = el("div", "qt"); wrap.dataset.values = "1"; wrap._lines = lines; body.append(wrap);
+  let sortDesc = true;
+  wrap._draw = () => {
+    wrap.textContent = "";
+    const t = el("table", "legend");
+    const hr = el("tr"); const th = el("th", "on", "Value " + (sortDesc ? "▾" : "▴")); th.addEventListener("click", () => { sortDesc = !sortDesc; wrap._draw(); });
+    hr.append(el("th", null, "Group"), th); t.append(hr);
+    const rows = lines.map((l) => ({ l, v: lastValue(l) })).sort((a, b) => sortDesc ? (b.v ?? -Infinity) - (a.v ?? -Infinity) : (a.v ?? Infinity) - (b.v ?? Infinity));
+    for (const r of rows) {
+      const tr = el("tr"), a = el("a", null, tagsText(lineInfo.get(r.l)?.line.tags) || lineInfo.get(r.l)?.line.metric);
+      a.href = "javascript:void 0"; a.addEventListener("click", () => openLine(r.l));
+      const td = el("td"); td.append(a);
+      tr.append(td, el("td", "num", withUnit(r.v, lineInfo.get(r.l)?.line.unit))); t.append(tr);
+    }
+    wrap.append(t);
+  };
+  wrap._draw();
+}
+function splitBody(body, def, lines) {
+  const dims = (def.split_config && def.split_config.split_dimensions) || [];
+  const tag = dims[0] && dims[0].one_graph_per;
+  const groups = new Map();
+  for (const l of lines) { const v = (lineInfo.get(l)?.line.tags || {})[tag] || "—"; if (!groups.has(v)) groups.set(v, []); groups.get(v).push(l); }
+  const limit = (def.split_config && def.split_config.limit) || 6;
+  const grid = el("div", "split-grid");
+  body.append(grid);
+  const st = requestStyle(def.source_widget_definition || {});
+  for (const [v, ls] of [...groups.entries()].slice(0, limit)) {
+    const cell = el("div", "split-cell"); cell.append(el("div", "split-title", (tag ? tag + ": " : "") + v));
+    const chart = el("div", "chart"); cell.append(chart); grid.append(cell);
+    watchChart(chart, { lines: ls, kind: "split", palette: st.palette, display: st.display, showLegend: false });
+  }
+}
+
+// ---- overlays: full-screen widget, side panel for a line (K6) ----------------------------------------------------------
+function closeOverlays() { for (const id of ["fullScreen", "sidePanel"]) { const o = $(id); if (o) { unwatchAll(o); o.remove(); } } }
+function drawOverlays() {
+  const r = current;
+  const fs = $("fullScreen"), sp = $("sidePanel");
+  if (fs && fs.dataset.key !== String(r.widget)) { unwatchAll(fs); fs.remove(); }
+  if (sp && sp.dataset.key !== String(r.line)) { unwatchAll(sp); sp.remove(); }
+  if (r.widget && !$("fullScreen")) drawFullScreen(r.widget);
+  if (r.line && !$("sidePanel")) drawSidePanel(r.line);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !current || current.page !== "dash") return;
+  if (current.line) setQuery("line", null); else if (current.widget) setQuery("widget", null);
+});
+
+function drawFullScreen(key) {
+  const box = [...document.querySelectorAll(".widget")].find((b) => b._widget && String(b._widget.w.id || b._widget.panel?.id) === key);
+  if (!box) return;
+  const { w, panel } = box._widget;
+  const def = w.definition || {};
+  const ov = el("div", "overlay"); ov.id = "fullScreen"; ov.dataset.key = key;
+  const card = el("div", "fs-card");
+  const head = el("div", "fs-head");
+  const close = el("button", "w-menu", "✕"); close.type = "button"; close.addEventListener("click", () => setQuery("widget", null));
+  head.append(el("h2", "fs-title", def.title || panel?.title || ""), timeBar(() => route()), close);
+  card.append(head);
+  ov.addEventListener("click", (e) => { if (e.target === ov) setQuery("widget", null); });
+  ov.append(card); document.body.append(ov);
+  if (!panel) { card.append(el("div", "w-note", def.content || "")); return; }
+  const lines = panel.lines.map((l) => l.id);
+  const body = el("div", "fs-body"); card.append(body);
+  const type = def.type === "timeseries" || !def.type ? "timeseries" : def.type;
+  if (type === "timeseries" || type === "split_group") {
+    const chart = el("div", "chart big"); body.append(chart);
+    const st = requestStyle(type === "split_group" ? def.source_widget_definition || {} : def);
+    watchChart(chart, { lines, kind: "big", palette: st.palette, display: st.display });
+  } else renderBody(body, type, def, lines, "big");
+  // legend table: min, max, avg, value
+  const search = el("input", "legend-search"); search.type = "search"; search.placeholder = "Filter lines…";
+  const table = el("table", "legend"); card.append(search, table);
+  let sortKey = "value";
+  const stats = (id) => { const s = series.get(id) || []; if (!s.length) return { min: null, max: null, avg: null, value: null };
+    let mn = Infinity, mx = -Infinity, sum = 0; for (const [, v] of s) { mn = Math.min(mn, v); mx = Math.max(mx, v); sum += v; } return { min: mn, max: mx, avg: sum / s.length, value: s[s.length - 1][1] }; };
+  const draw = () => {
+    table.textContent = "";
+    const hr = el("tr");
+    for (const [k, t] of [["name", "Line"], ["min", "Min"], ["max", "Max"], ["avg", "Avg"], ["value", "Value"]]) { const th = el("th", k === sortKey ? "on" : null, t); th.addEventListener("click", () => { sortKey = k; draw(); }); hr.append(th); }
+    table.append(hr);
+    const q = search.value.trim().toLowerCase();
+    const rows = panel.lines.filter((l) => !q || (tagsText(l.tags) + " " + l.metric).toLowerCase().includes(q)).map((l) => ({ l, s: stats(l.id) }));
+    rows.sort((a, b) => sortKey === "name" ? tagsText(a.l.tags).localeCompare(tagsText(b.l.tags)) : (b.s[sortKey] ?? -Infinity) - (a.s[sortKey] ?? -Infinity));
+    for (const { l, s } of rows) {
+      const tr = el("tr"), a = el("a", null, tagsText(l.tags) || l.metric); a.href = "javascript:void 0"; a.addEventListener("click", () => openLine(l.id));
+      const st = lineState(l.id); const td = el("td"); td.append(a); if (st === "open" || st === "waiting") td.append(el("span", "state " + st, st === "open" ? " ● open" : " ● needs a reason"));
+      tr.append(td); for (const k of ["min", "max", "avg", "value"]) tr.append(el("td", "num", withUnit(s[k], l.unit)));
+      table.append(tr);
+    }
+  };
+  search.addEventListener("input", draw); draw();
+}
+
+let sidePanelState = null;
+async function drawSidePanel(lineId) {
+  const info = lineInfo.get(lineId);
+  const ov = el("aside", "side-panel"); ov.id = "sidePanel"; ov.dataset.key = lineId;
+  document.body.append(ov);
+  const head = el("div", "sp-head");
+  const close = el("button", "w-menu", "✕"); close.type = "button"; close.addEventListener("click", () => setQuery("line", null));
+  head.append(el("h2", "sp-title", info ? (tagsText(info.line.tags) || info.line.metric) : lineId), close);
+  ov.append(head);
+  if (!info) { ov.append(el("div", "empty", "This metric is not in the catalogue (yet).")); return; }
+  const { line, places } = info, p0 = places[0];
+  if (!series.has(lineId)) { try { await loadRange("/dash/line?id=" + lineId + "&range=" + range, [lineId]); } catch (e) { /* shown empty */ } }
+  const chart = el("div", "chart metric"); ov.append(chart);
+  watchChart(chart, { lines: [lineId], kind: "metric", palette: "dog_classic" });
+  const pts = series.get(lineId) || [], last = pts.length ? pts[pts.length - 1] : null;
+  const newest = [...(incidentsOfLine.get(lineId) || [])].map((i) => incidents.get(i)).filter(Boolean).sort((a, b) => Number(b.started_ms) - Number(a.started_ms))[0];
+  const s = newest ? (newest.series || []).find((x) => x.series_id === lineId) : null;
+  const details = el("dl", "details");
   const add = (k, v) => { details.append(el("dt", null, k), el("dd", null, v)); };
-  add("Metric", line.metric);
-  add("Question", line.query || "—");
-  add("Tags", tagsText(line.tags) || "—");
+  add("Metric", line.metric); add("Question", line.query || "—"); add("Tags", tagsText(line.tags) || "—");
   add("Shown on", places.map((p) => p.dashboard.title + " › " + (p.group.title ? p.group.title + " › " : "") + p.panel.title).join("\n"));
-  add("Region", siteName(p0.site) + " (" + p0.site + ")");
-  add("Unit · kind", (line.unit || "—") + " · " + (line.kind || "—"));
-  add("Judged as", s ? s.signal + (s.bau ? " (BAU)" : "") : "the rule for " + (line.kind || "its kind") + " (no anomaly yet)");
-  add("Normal", s ? withUnit(s.normal_value, line.unit) + " (at its last anomaly)" : "—");
+  add("Region", siteName(p0.site) + " (" + p0.site + ")"); add("Unit · kind", (line.unit || "—") + " · " + (line.kind || "—"));
+  add("Signal", s ? s.signal + (s.bau ? " (BAU)" : "") : "—"); add("Normal", s ? withUnit(s.normal_value, line.unit) + " (at its last anomaly)" : "—");
   add("Newest value", last ? withUnit(last[1], line.unit) + " · " + shortTime(last[0]) : "no value in this range");
-  const below = el("section", "anomalies");
-  below.append(el("h2", null, "Anomalies"));
-  const list = el("div", "anom-list");
-  below.append(list);
-  main.append(below);
-  main._anomalies = { list, lineId };
+  ov.append(details, el("h3", "sp-sub", "Anomalies (last 24 hours)"));
+  const list = el("div", "anom-list"); ov.append(list);
+  sidePanelState = { list, lineId };
   await drawAnomalies(list, lineId);
+}
+function rerenderMetricAnomalies() {
+  if (sidePanelState && $("sidePanel") && $("sidePanel").dataset.key === sidePanelState.lineId) drawAnomalies(sidePanelState.list, sidePanelState.lineId);
 }
 
 let pastCache = { line: "", data: null, at: 0 };
@@ -688,10 +946,6 @@ async function drawAnomalies(list, lineId) {
     list.append(row);
   }
 }
-function rerenderMetricAnomalies() {
-  const a = $("incidentsView")._anomalies;
-  if (a && current?.page === "metric" && current.line === a.lineId) drawAnomalies(a.list, a.lineId);
-}
 
 // ---- reasons (per line, or the same for every waiting line of the incident) ------------------------------------------
 const pending = new Map();      // "incident|line" -> {text, bad, deadline}
@@ -705,7 +959,7 @@ function reasonBoxes(inc, lineId) {
     const others = el("div", "muted others", "This anomaly also waits on: ");
     waiting.filter((s) => s.series_id !== lineId).forEach((s, i) => {
       if (i) others.append(", ");
-      const a = el("a", null, tagsText(s.group_tags) || s.metric); a.href = "#/metric/" + s.series_id; others.append(a);
+      const a = el("a", null, tagsText(s.group_tags) || s.metric); a.href = "javascript:void 0"; a.addEventListener("click", () => openLine(s.series_id)); others.append(a);
     });
     wrap.append(others, reasonBox(inc.incident_id, "", "Same reason for all " + waiting.length + " lines (closes it)"));
   }
@@ -752,55 +1006,44 @@ setInterval(() => {
   for (const [key, p] of pending) if (p.deadline && Date.now() > p.deadline) { p.deadline = 0; p.text = "not saved: no answer from the Detector yet (send again)"; p.bad = true; rerenderMetricAnomalies(); }
 }, 1000);
 
+
 // ---- start -------------------------------------------------------------------------------------------------------
 (async function start() {
   await loadCatalogue();
   route();
   connect();
-  setInterval(async () => { const before = JSON.stringify(catalogue.sites.map((s) => s.dashboards.map((d) => d.id + d.lineCount))); await loadCatalogue();
-    if (JSON.stringify(catalogue.sites.map((s) => s.dashboards.map((d) => d.id + d.lineCount))) !== before && current?.page === "region") route(); }, 60000);
+  setInterval(async () => { await loadCatalogue(); if (current?.page === "list") route(); }, 60000);
 })();
 
-// ---- a synthetic region for measuring memory (add-dashboard-view task 3.4): __benchRegion(20, 40, 10) --------------
-window.__benchRegion = async function (dashboards = 20, panels = 40, linesPer = 10) {
+// ---- measuring memory with a synthetic region (add-datadog-look 3.1): __benchRegion(20, 40, 10) ----------------------
+window.__benchRegion = async function (dashboards = 20, widgets = 40, linesPer = 10) {
   const site = "bench.example", now = Date.now(), from = now - rangeMs(range);
-  const dash = [];
-  let n = 0;
+  leave(); const main = $("incidentsView"); main.textContent = ""; current = { page: "bench" };
+  const grid = el("div", "dd-grid"); main.append(grid); sizeGrid();
+  let n = 0; const t0 = performance.now();
   for (let d = 0; d < dashboards; d++) {
-    const groups = [];
-    for (let g = 0; g < 4; g++) {
-      const ps = [];
-      for (let p = 0; p < panels / 4; p++) {
-        const lines = [];
-        for (let l = 0; l < linesPer; l++) {
-          const id = (n++).toString(16).padStart(16, "0");
-          lines.push({ id, metric: "bench.metric", tags: { status: String(200 + l) }, unit: "ms", kind: "latency" });
-          const pts = []; for (let i = 0; i < 300; i++) pts.push([from + i * (now - from) / 300, 100 + 20 * Math.sin(i / 9 + l) + (i === 150 ? 400 : 0)]);
-          series.set(id, pts);
-        }
-        ps.push({ id: "b" + d + "g" + g + "p" + p, title: "Panel " + p, lines });
+    const dash = { id: "bench~" + d, title: "Bench " + d, site, groups: [] };
+    const box = groupBox({ definition: { title: "Bench dashboard " + d, type: "group", background_color: "vivid_blue" } }, dash);
+    for (let w = 0; w < widgets; w++) {
+      const lines = [];
+      for (let l = 0; l < linesPer; l++) {
+        const id = (n++).toString(16).padStart(16, "0");
+        const line = { id, metric: "bench.metric", tags: { status: String(200 + l) }, unit: "ms", kind: "latency" };
+        lineInfo.set(id, { line, places: [{ site, dashboard: dash, group: { title: "" }, panel: { id: "p" + w, title: "W" + w } }] });
+        const pts = []; for (let i = 0; i < 300; i++) pts.push([from + i * (now - from) / 300, 100 + 20 * Math.sin(i / 9 + l) + (i === 150 ? 400 : 0)]);
+        series.set(id, pts); lines.push(line);
       }
-      groups.push({ title: "Group " + g, index: g + 1, panels: ps });
+      const node = widgetBox({ id: d * 1000 + w, definition: { type: "timeseries", title: "Widget " + w } }, { id: "p" + d + "_" + w, title: "W" + w, lines }, dash);
+      node.style.gridColumn = "span 4"; node.style.height = "calc(var(--row) * 2 + 8px)";
+      box.inner.append(node);
     }
-    dash.push({ id: "bench-" + d, title: "Bench dashboard " + d, site, groups, panelCount: panels, lineCount: panels * linesPer });
+    grid.append(box.el);
   }
-  catalogue.sites = catalogue.sites.filter((s) => s.site !== site).concat([{ site, label: "BENCH", dashboards: dash }]);
-  for (const d of dash) { dashById.set(d.id, { dashboard: d, site }); d.groups.forEach((g) => g.panels.forEach((p) => p.lines.forEach((l) => lineInfo.set(l.id, { line: l, places: [{ site, dashboard: d, group: g, panel: p }] })))); }
-  const main = $("incidentsView");
-  leave(); main.textContent = ""; current = { page: "bench" };
-  main.append(el("h1", "page-title", "Bench region"));
-  const t0 = performance.now();
-  for (const d of dash) {
-    const card = el("section", "dash"); card.dataset.dash = d.id;
-    const body = el("div", "dash-body"); card.append(el("div", "dash-head", d.title), body); main.append(card);
-    for (const g of d.groups) { const grid = el("div", "panels"); body.append(grid); for (const p of g.panels) grid.append(panelCard(p)); }
-  }
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise((r) => setTimeout(r, 50));
   const firstMs = performance.now() - t0;
   let maxCharts = 0;
   for (let y = 0; y < document.body.scrollHeight; y += innerHeight) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 60)); maxCharts = Math.max(maxCharts, charts.size); }
-  scrollTo(0, 0);
-  await new Promise((r) => setTimeout(r, 300));
+  scrollTo(0, 0); await new Promise((r) => setTimeout(r, 300));
   const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
-  return { dashboards, panels: dashboards * panels, lines: n, firstPaintMs: Math.round(firstMs), chartsAliveMax: maxCharts, chartsAliveNow: charts.size, jsHeapMB: mem };
+  return { dashboards, widgets: dashboards * widgets, lines: n, firstPaintMs: Math.round(firstMs), chartsAliveMax: maxCharts, chartsAliveNow: charts.size, jsHeapMB: mem };
 };

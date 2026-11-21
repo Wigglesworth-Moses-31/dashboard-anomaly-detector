@@ -77,6 +77,50 @@ public class HistoryRepository {
      * the minute and its highest 30 s later, so thinning keeps both drops and spikes. One query: O(points).
      */
     public void batch(List<String> seriesIds, long fromMs, long toMs, boolean raw, java.util.function.BiConsumer<String, List<Point>> chunks) {
+        batch(seriesIds, fromMs, toMs, raw, 0, "avg", chunks);
+    }
+
+    /**
+     * As above; with {@code intervalMs} > 0 the raw values are rolled up in the database to that interval with
+     * {@code method} (avg, sum, min, max), one point per interval and line (add-datadog-look K8): a page gets at most a
+     * few hundred points per line, whatever the range. One query, O(points read).
+     */
+    public void batch(List<String> seriesIds, long fromMs, long toMs, boolean raw, long intervalMs, String method,
+                      java.util.function.BiConsumer<String, List<Point>> chunks) {
+        if (intervalMs > 0) {
+            if (!java.util.Set.of("avg", "sum", "min", "max").contains(method)) {
+                throw new IllegalArgumentException("method must be avg, sum, min or max");
+            }
+            String bucketed = "SELECT series_id, time_bucket(make_interval(secs => ?), ts) AS b, " + method + "(value) FROM metrics.points "
+                    + "WHERE series_id = ANY (?) AND ts >= ? AND ts < ? GROUP BY series_id, b ORDER BY series_id, b";
+            readOnly.executeWithoutResult(status -> streaming.execute((java.sql.Connection c) -> {
+                try (var ps = c.prepareStatement(bucketed)) {
+                    ps.setFetchSize(CHUNK);
+                    ps.setDouble(1, intervalMs / 1000.0);
+                    ps.setArray(2, c.createArrayOf("text", seriesIds.toArray()));
+                    ps.setTimestamp(3, Timestamp.from(Instant.ofEpochMilli(fromMs)));
+                    ps.setTimestamp(4, Timestamp.from(Instant.ofEpochMilli(toMs)));
+                    try (var rs = ps.executeQuery()) {
+                        String current = null;
+                        List<Point> chunk = new ArrayList<>(CHUNK);
+                        while (rs.next()) {
+                            String id = rs.getString(1);
+                            if (current != null && (!current.equals(id) || chunk.size() >= CHUNK)) {
+                                chunks.accept(current, List.copyOf(chunk));
+                                chunk.clear();
+                            }
+                            current = id;
+                            chunk.add(Point.newBuilder().setTsMs(rs.getTimestamp(2).getTime()).setValue(rs.getDouble(3)).build());
+                        }
+                        if (current != null && !chunk.isEmpty()) {
+                            chunks.accept(current, List.copyOf(chunk));
+                        }
+                    }
+                }
+                return null;
+            }));
+            return;
+        }
         String sql = raw
                 ? "SELECT series_id, ts, value, value FROM metrics.points WHERE series_id = ANY (?) AND ts >= ? AND ts < ? ORDER BY series_id, ts"
                 : "SELECT series_id, minute, min, max FROM metrics.points_1m WHERE series_id = ANY (?) AND minute >= ? AND minute < ? ORDER BY series_id, minute";

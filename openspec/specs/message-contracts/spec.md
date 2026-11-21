@@ -171,18 +171,6 @@ a stream.
 - **WHEN** the Notifier starts
 - **THEN** one question gives it every line's description, with its views and their order
 
-### Requirement: Messages are kept 10 days, compressed
-Every topic SHALL keep its messages 10 days, and every producer SHALL compress its messages (zstd). Existing topics
-SHALL be changed in place when the system starts, without losing messages.
-
-#### Scenario: Topic settings
-- **WHEN** the topics are described after start
-- **THEN** each shows a retention of 10 days
-
-#### Scenario: Smaller on disk
-- **WHEN** the same recording is replayed with and without compression
-- **THEN** the bytes on disk per message are smaller with compression, and the ratio is written down
-
 ### Requirement: Points and incidents say when they come from backfill
 A batch of points SHALL be able to say it was pulled as backfill, and an incident SHALL be able to say it was found
 in backfill. Both SHALL be new fields, so older readers keep working.
@@ -194,3 +182,35 @@ in backfill. Both SHALL be new fields, so older readers keep working.
 #### Scenario: Older reader
 - **WHEN** a reader built before this change reads a backfilled batch
 - **THEN** it reads the points as usual
+
+### Requirement: Messages are kept 24 hours, compressed
+Every topic SHALL keep its messages 24 hours, and every producer SHALL compress its messages (zstd). Existing topics
+SHALL be changed in place when the system starts, without losing messages. Incidents still waiting SHALL be announced
+again at least every 12 hours, so a reader rebuilding from 24 hours of events still knows them.
+
+#### Scenario: Topic settings
+- **WHEN** the topics are described after start
+- **THEN** each shows a retention of 24 hours
+
+#### Scenario: Waiting for two days
+- **GIVEN** an incident calm for 2 days without a reason
+- **WHEN** the Notifier restarts
+- **THEN** it knows the incident from its latest announcement
+
+### Requirement: A line's view names its widget
+Each view of a metric line SHALL carry the id of its widget in the exported dashboard JSON (0 when not known), as a
+new field, so a page can place every line in exactly its widget even when two widgets share a title.
+
+#### Scenario: Two widgets with the same title
+- **GIVEN** a dashboard with two "Latency" widgets, ids 101 and 202
+- **WHEN** their lines are described
+- **THEN** each line's view says 101 or 202
+
+### Requirement: Many lines' history at a chosen interval
+The Store's batch history question SHALL be able to ask for values rolled up to an interval with a method (average,
+sum, minimum or maximum), so a page receives at most a few hundred points per line, computed in the database. New
+fields only; a question without them is answered as before.
+
+#### Scenario: Six hours at two minutes
+- **WHEN** 200 lines are asked for 6 hours at a 2-minute interval, averaged
+- **THEN** each line comes back with at most 180 points, each the average of its interval

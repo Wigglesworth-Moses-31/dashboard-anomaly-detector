@@ -49,7 +49,7 @@ final class ReplayComparison {
             // other difference still fails
             @Override public void send(SeriesDescriptor d) {
                 SeriesDescriptor.Builder b = d.toBuilder();
-                b.getViewsBuilderList().forEach(v -> v.clearPanelPath().clearGroupIndex().clearPanelIndex());   // + add-dashboard-view D1
+                b.getViewsBuilderList().forEach(v -> v.clearPanelPath().clearGroupIndex().clearPanelIndex().clearWidgetId());   // + add-dashboard-view D1
                 replayed.add("SeriesDescriptor\t" + ContractJson.toJson(b.build()));
             }
             @Override public void send(MetricPoints p) { replayed.add("MetricPoints\t" + ContractJson.toJson(p)); }

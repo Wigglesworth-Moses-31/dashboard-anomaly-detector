@@ -31,7 +31,12 @@ public record PollUnit(String key, List<Query> queries, List<String> formulas, L
 
     /** A panel showing this unit's numbers; {@code filters} is the view's decided filters (for health and the check). */
     public record View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters,
-                       int groupIndex, int panelIndex) {
+                       int groupIndex, int panelIndex, long widgetId) {
+        public View(String dashboardId, String dashboardTitle, String panelTitle, String path, String filters,
+                    int groupIndex, int panelIndex) {
+            this(dashboardId, dashboardTitle, panelTitle, path, filters, groupIndex, panelIndex, 0);
+        }
+
         public View(String dashboardId, String dashboardTitle, String panelTitle, String path) {
             this(dashboardId, dashboardTitle, panelTitle, path, "");
         }

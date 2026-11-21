@@ -155,8 +155,11 @@ class StoreGrpcService extends StoreServiceGrpc.StoreServiceImplBase {
         if (problem == null && request.getSeriesIdsList().stream().anyMatch(id -> !SeriesIds.isId(id))) {
             problem = "every series_id must be 16 hex characters";
         }
-        if (problem == null && request.getResolution() == Resolution.RESOLUTION_UNSPECIFIED) {
-            problem = "resolution must be RAW or MINUTE";
+        if (problem == null && request.getResolution() == Resolution.RESOLUTION_UNSPECIFIED && request.getIntervalMs() <= 0) {
+            problem = "resolution must be RAW or MINUTE, or an interval given";
+        }
+        if (problem == null && request.getIntervalMs() > 0 && request.getIntervalMs() < 1_000) {
+            problem = "interval_ms must be at least 1000";
         }
         if (problem != null) {
             chunks.onError(Status.INVALID_ARGUMENT.withDescription(problem).asRuntimeException());
@@ -167,8 +170,14 @@ class StoreGrpcService extends StoreServiceGrpc.StoreServiceImplBase {
             return;
         }
         try {
+            String method = switch (request.getMethod()) {                 // add-datadog-look K8
+                case ROLLUP_SUM -> "sum";
+                case ROLLUP_MIN -> "min";
+                case ROLLUP_MAX -> "max";
+                default -> "avg";
+            };
             history.batch(request.getSeriesIdsList(), request.getFromMs(), request.getToMs(),
-                    request.getResolution() == Resolution.RESOLUTION_RAW,
+                    request.getResolution() == Resolution.RESOLUTION_RAW, Math.max(0, request.getIntervalMs()), method,
                     (id, points) -> chunks.onNext(HistoryChunk.newBuilder().setSeriesId(id).addAllPoints(points).build()));
             chunks.onCompleted();
         } catch (RuntimeException e) {

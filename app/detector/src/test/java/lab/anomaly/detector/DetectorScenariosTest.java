@@ -870,4 +870,17 @@ class DetectorScenariosTest {
         assertThat(of(EventType.EVENT_TYPE_OPENED)).singleElement()
                 .satisfies(c -> assertThat(c.incident().getFoundInBackfill()).isFalse());
     }
+
+    @Test
+    void aRestoredWaitingIncidentIsAnnouncedAgainAtOnce() {                  // keep-one-day: Kafka keeps only 24 hours
+        SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
+        calmIncident(inv);
+        Change calm = calmed().get(0);
+        Detector restarted = new Detector(() -> "inc-new");
+        restarted.configure(Fixtures.defaults(), 1);
+        restarted.restore(calm.incident(), calm.sequence());
+        assertThat(restarted.reannounce(System.currentTimeMillis(), 12 * 3_600_000L)).singleElement()
+                .satisfies(c -> assertThat(c.incident().getIncidentId()).isEqualTo(calm.incident().getIncidentId()));
+        assertThat(restarted.reannounce(System.currentTimeMillis() + 60_000, 12 * 3_600_000L)).as("then every 12 hours").isEmpty();
+    }
 }

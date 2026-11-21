@@ -77,7 +77,8 @@ public final class AnswerTranslator {
             unit.views().forEach(v -> description.addViews(View.newBuilder()
                     .setViewId(v.dashboardId()).setViewTitle(v.dashboardTitle()).setPanelTitle(v.panelTitle())
                     .setPanelPath(v.path() == null ? "" : v.path())                  // add-incident-history H2
-                    .setGroupIndex(v.groupIndex()).setPanelIndex(v.panelIndex())));  // add-dashboard-view D1
+                    .setGroupIndex(v.groupIndex()).setPanelIndex(v.panelIndex())     // add-dashboard-view D1
+                    .setWidgetId(v.widgetId())));                                     // add-datadog-look K1
 
             List<Point> points = new ArrayList<>();
             for (int i = 0; i < answer.times().size() && i < series.values().size(); i++) {

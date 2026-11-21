@@ -388,7 +388,9 @@ public final class IncidentBook {
         open.foundInBackfill = incident.getFoundInBackfill();
         open.sequence = sequence;
         open.lastUpdateTs = incident.getStartedMs();
-        open.lastAnnouncedMs = System.currentTimeMillis();      // it was announced before the restart
+        // Announced again at the first check after a restart (keep-one-day): Kafka keeps 24 hours, so after a longer
+        // stop its last announcement may be gone, and a reader rebuilding from Kafka would never learn of it
+        open.lastAnnouncedMs = 0;
         for (Link link : incident.getLinksList()) {
             open.links.put(link.getLabel(), link);
         }

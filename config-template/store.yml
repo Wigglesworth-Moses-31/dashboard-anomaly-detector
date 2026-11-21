@@ -16,11 +16,11 @@ spring:
 anomaly:
   store:
     grpc-port: 9102
-    # --- add-store, keep-ten-days (lab system: nothing kept longer than 10 days; older data compressed) ---
-    raw-safety-limit: 10d                     # raw 10-second points kept (compressed after 6 hours), at most 10d
-    summary-retention: 10d                    # per-minute summaries kept (compressed after 3 days), at most 10d
+    # --- add-store, keep-one-day (24 hours kept by default, at most 10 days; raw values compressed after 6 hours) ---
+    raw-safety-limit: 1d                      # raw 10-second points kept (compressed after 6 hours), at most 10d
+    summary-retention: 1d                     # per-minute summaries kept, at most 10d
     max-batch-records: 500                    # records per poll and per database write
     poll-timeout: 200ms
-    history-max-range: 10d                    # longest window one question may ask
-    max-database-size: 1GB                    # above this the Store's health is DEGRADED (size alarm)
+    history-max-range: 1d                     # longest window one question may ask
+    max-database-size: 10GB                   # above this the Store's health is DEGRADED (size alarm)
     size-check-interval: 1m

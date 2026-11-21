@@ -20,7 +20,7 @@ public final class Catalogue {
 
     public record Line(String id, String metric, Map<String, String> tags, String unit, String kind, String query) {}
 
-    public record Panel(String id, String title, String group, int groupIndex, int panelIndex, List<Line> lines) {}
+    public record Panel(String id, String title, String group, int groupIndex, int panelIndex, long widgetId, List<Line> lines) {}
 
     public record Group(String title, int index, List<Panel> panels) {}
 
@@ -65,7 +65,9 @@ public final class Catalogue {
                     title = v.getViewTitle();
                     List<Line> ls = panelEntry.getValue().stream().map(r -> line(r.d())).distinct()
                             .sorted(Comparator.comparing(l -> l.tags().toString())).toList();
-                    panelList.add(new Panel(panelEntry.getKey(), v.getPanelTitle(), v.getPanelPath(), v.getGroupIndex(), v.getPanelIndex(), ls));
+                    long widgetId = panelEntry.getValue().stream().mapToLong(r -> r.view().getWidgetId()).filter(x -> x != 0).findFirst().orElse(0);
+                    panelList.add(new Panel(panelEntry.getKey(), v.getPanelTitle(), v.getPanelPath(), v.getGroupIndex(), v.getPanelIndex(),
+                            widgetId, ls));
                 }
                 panelList.sort(Comparator.comparingInt((Panel p) -> p.groupIndex() == 0 ? Integer.MAX_VALUE : p.groupIndex())
                         .thenComparingInt(p -> p.panelIndex() == 0 ? Integer.MAX_VALUE : p.panelIndex())

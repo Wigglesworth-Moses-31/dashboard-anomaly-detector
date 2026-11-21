@@ -111,4 +111,47 @@ class DashTest {
         d.range(List.of("00000000000000a1"), Duration.ofDays(1), 100_000_000, 600);
         assertThat(lastRaw).isFalse();
     }
+
+    // ---- add-datadog-look K8: auto interval and rollup method like Datadog -------------------------------------
+
+    @Test
+    void theAutoIntervalGivesAtMostThreeHundredPoints() {
+        assertThat(DashService.autoInterval(Duration.ofMinutes(15))).isEqualTo(10_000);
+        assertThat(DashService.autoInterval(Duration.ofMinutes(30))).isEqualTo(10_000);
+        assertThat(DashService.autoInterval(Duration.ofHours(1))).isEqualTo(20_000);
+        assertThat(DashService.autoInterval(Duration.ofHours(3))).isEqualTo(60_000);
+        assertThat(DashService.autoInterval(Duration.ofHours(6))).isEqualTo(120_000);
+        assertThat(DashService.autoInterval(Duration.ofHours(12))).isEqualTo(300_000);
+        assertThat(DashService.autoInterval(Duration.ofDays(1))).isEqualTo(300_000);
+    }
+
+    @Test
+    void theRollupMethodFollowsTheQueryLikeDatadog() {
+        assertThat(DashService.method("avg:lab.api.latency{env:prod} by {api}.rollup(max, 10)")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+        assertThat(DashService.method("sum:lab.api.request.count{*} by {status}.as_count().rollup(max, 10)")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM);
+        assertThat(DashService.method("avg:x{*}.rollup(min, 60).rollup(max, 10)")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_MIN);
+        assertThat(DashService.method("")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+    }
+
+    @Test
+    void linesAreAskedOncePerMethodAtTheRangesInterval() {
+        java.util.List<String> asked = new java.util.ArrayList<>();
+        StoreClient.Store store = new StoreClient.Store() {
+            @Override public List<SeriesDescriptor> listSeries() {
+                return List.of(line("00000000000000a1", "datadoghq.com", "", 0, "P", 0, "1").toBuilder().setQueryText("avg:lat{*}").build(),
+                        line("00000000000000a2", "datadoghq.com", "", 0, "P", 0, "2").toBuilder().setQueryText("sum:req{*}.as_count()").build());
+            }
+            @Override public Map<String, List<Point>> history(List<String> ids, long fromMs, long toMs, boolean raw) { return Map.of(); }
+            @Override public Map<String, List<Point>> history(List<String> ids, long fromMs, long toMs, long intervalMs, lab.anomaly.contracts.v1.Rollup m) {
+                asked.add(m + " " + intervalMs + " " + ids);
+                return Map.of(ids.get(0), List.of(p(fromMs, 1)));
+            }
+        };
+        DashService d = new DashService(new lab.anomaly.kit.settings.SettingsHolder<>("anomaly.notifier", lab.anomaly.notifier.NotifierSettings.class, List.of(),
+                new org.springframework.mock.env.MockEnvironment().withProperty("anomaly.notifier.rsocket-port", "7104")
+                        .withProperty("anomaly.notifier.day-by", "started").withProperty("anomaly.notifier.max-queued-updates-per-viewer", "2000")), store);
+        List<DashService.Series> out = d.rolled(List.of("00000000000000a1", "00000000000000a2"), Duration.ofHours(6), 100_000_000, 120_000);
+        assertThat(asked).containsExactlyInAnyOrder("ROLLUP_AVG 120000 [00000000000000a1]", "ROLLUP_SUM 120000 [00000000000000a2]");
+        assertThat(out).allSatisfy(s -> assertThat(s.points()).hasSize(1));
+    }
 }
