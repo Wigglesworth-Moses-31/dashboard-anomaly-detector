@@ -175,13 +175,10 @@ function drawAttention() {
   if (!$("attentionList").hidden) fillAttentionList(open, waiting);
   refreshBadges();
   refreshShading();
+  const m = $("incidentsView");
+  if (m._redrawAnomalies && current?.page === "anomalies") m._redrawAnomalies();
 }
-$("attention").addEventListener("click", () => {
-  const list = $("attentionList");
-  list.hidden = !list.hidden;
-  $("attention").setAttribute("aria-expanded", String(!list.hidden));
-  if (!list.hidden) { const { open, waiting } = attentionLines(); fillAttentionList(open, waiting); }
-});
+$("attention").addEventListener("click", () => { location.hash = "#/anomalies?state=open,waiting"; });   // group-anomalies
 function fillAttentionList(open, waiting) {
   const list = $("attentionList");
   list.textContent = "";
@@ -468,7 +465,7 @@ function drawNav() {
   const nav = $("regionNav");
   nav.textContent = "";
   const route = parseRoute();
-  const site = route.site || (route.dash && dashById.get(route.dash)?.site);
+  const site = route.page === "anomalies" ? null : route.site || (route.dash && dashById.get(route.dash)?.site);
   for (const t of siteTabs()) {
     const a = el("a", "nav-item" + (site === t.site && route.page !== "settings" ? " active" : ""));
     a.href = "#/dashboards/" + encodeURIComponent(t.site);
@@ -477,10 +474,12 @@ function drawNav() {
     nav.append(a);
   }
   $("tabSettings").classList.toggle("active", route.page === "settings");
+  $("tabAnomalies").classList.toggle("active", route.page === "anomalies");
 }
 function parseRoute() {
   const h = location.hash;
   if (h === "#settings") return { page: "settings" };
+  if (h.startsWith("#/anomalies")) return { page: "anomalies" };
   const [path, query] = h.split("?");
   const q = new URLSearchParams(query || "");
   let m;
@@ -510,6 +509,7 @@ async function route() {
   main.textContent = "";
   current = r;
   if (r.page === "list") drawList(main, r.site);
+  else if (r.page === "anomalies") drawAnomaliesPage(main);
   else if (r.page === "dash") { await drawDashboard(main, r.dash); drawOverlays(); }
   else main.append(el("div", "empty", catalogue.problem ? "Dashboards unavailable: " + catalogue.problem : "No dashboards yet: add a region and its dashboards in Settings."));
 }
@@ -1006,6 +1006,183 @@ setInterval(() => {
   for (const [key, p] of pending) if (p.deadline && Date.now() > p.deadline) { p.deadline = 0; p.text = "not saved: no answer from the Detector yet (send again)"; p.bad = true; rerenderMetricAnomalies(); }
 }, 1000);
 
+
+// ---- anomalies grouped by region, dashboard and service (group-anomalies) ----------------------------------------------
+const STATES = [["open", "Open"], ["waiting", "Needs a reason"], ["closed", "Closed"], ["past", "Past"]];
+const STATE_RANK = { open: 0, waiting: 1, closed: 2, past: 3 };
+
+/** An anomaly's state: open, waiting (calm, a non-BAU line without a reason), closed, or past (found in backfill). */
+function anomalyState(inc) {
+  if (inc.found_in_backfill) return "past";
+  if (inc.state === "INCIDENT_STATE_CLOSED") return "closed";
+  const lines = inc.series || [];
+  if (lines.length && lines.every((s) => s.bau)) return "closed";
+  if (inc.state === "INCIDENT_STATE_CALM") return lines.some((s) => isWaiting(inc, s)) ? "waiting" : "closed";
+  return "open";
+}
+
+/** "datadoghq.com|api=/v1/invoices" → "api /v1/invoices"; upstream tags read "upstream …"; a dashboard group "(no service tag)". */
+function serviceName(inc) {
+  const key = String(inc.group_key || "");
+  const g = key.includes("|") ? key.slice(key.indexOf("|") + 1) : key;
+  const eq = g.indexOf("=");
+  if (eq < 0) return g || "(no service tag)";
+  const tag = g.slice(0, eq), value = g.slice(eq + 1);
+  if (tag === "dashboard") return "(no service tag)";
+  if (tag === "upstream_service" || tag === "peer.rpc.service") return "upstream " + value;
+  return tag + " " + value;
+}
+
+/**
+ * Region → dashboard → service → anomalies, filtered by state and text, then sorted: regions and dashboards by name,
+ * services worst first then by name, anomalies newest first. An anomaly on two dashboards is listed under both.
+ * O(anomalies × lines) to build, O(n log n) to sort.
+ */
+function groupAnomalies(states, text) {
+  const q = (text || "").trim().toLowerCase();
+  const regionsMap = new Map();
+  for (const inc of incidents.values()) {
+    const st = anomalyState(inc);
+    if (!states.has(st)) continue;
+    const service = serviceName(inc);
+    const places = new Map();                                   // "site|dashboard id" → {site, dashboard}
+    for (const s of inc.series || []) {
+      for (const p of (lineInfo.get(s.series_id) || { places: [] }).places) places.set(p.site + "|" + p.dashboard.id, p);
+    }
+    if (!places.size) places.set("?|?", { site: "?", dashboard: { id: "", title: s0(inc) } });
+    for (const p of places.values()) {
+      const hay = (service + " " + p.dashboard.title + " " + (inc.title || "") + " " + (inc.series || []).map((s) => tagsText(s.group_tags)).join(" ")).toLowerCase();
+      if (q && !hay.includes(q)) continue;
+      if (!regionsMap.has(p.site)) regionsMap.set(p.site, new Map());
+      const dashes = regionsMap.get(p.site);
+      if (!dashes.has(p.dashboard.id)) dashes.set(p.dashboard.id, { dashboard: p.dashboard, services: new Map() });
+      const svcs = dashes.get(p.dashboard.id).services;
+      if (!svcs.has(service)) svcs.set(service, []);
+      svcs.get(service).push({ inc, state: st });
+    }
+  }
+  const count = (list) => ({ open: list.filter((a) => a.state === "open").length, waiting: list.filter((a) => a.state === "waiting").length, all: list.length });
+  const worst = (list) => Math.min(...list.map((a) => STATE_RANK[a.state]));
+  const out = [];
+  for (const [site, dashes] of regionsMap) {
+    const dl = [];
+    for (const { dashboard, services } of dashes.values()) {
+      const sl = [...services.entries()].map(([name, list]) => ({ name, list: list.sort((a, b) => Number(b.inc.started_ms) - Number(a.inc.started_ms)), c: count(list), worst: worst(list) }));
+      const untagged = (n) => (n === "(no service tag)" ? 1 : 0);          // the catch-all group goes last
+      sl.sort((a, b) => (a.worst - b.worst) || (untagged(a.name) - untagged(b.name)) || a.name.localeCompare(b.name));
+      const all = sl.flatMap((x) => x.list);
+      dl.push({ dashboard, services: sl, c: count(all) });
+    }
+    dl.sort((a, b) => a.dashboard.title.localeCompare(b.dashboard.title));
+    out.push({ site, label: siteName(site), dashboards: dl, c: count(dl.flatMap((d) => d.services.flatMap((s) => s.list))) });
+  }
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  return out;
+}
+function s0(inc) { return (inc.series && inc.series[0] && inc.series[0].dashboard_title) || "Dashboard"; }
+
+function chosenStates() {
+  const q = new URLSearchParams((location.hash.split("?")[1]) || "");
+  const fromUrl = q.get("state");
+  const saved = store.get("anom-states");
+  const list = (fromUrl || saved || "open,waiting").split(",").filter((s) => STATE_RANK[s] != null);
+  return new Set(list.length ? list : ["open", "waiting"]);
+}
+
+function drawAnomaliesPage(main) {
+  const head = el("div", "page-head");
+  head.append(el("h1", "page-title", "Anomalies"), el("span", "muted", "last 24 hours · region › dashboard › service"));
+  main.append(head);
+  const bar = el("div", "anom-filters");
+  const states = chosenStates();
+  for (const [key, label] of STATES) {
+    const b = el("button", "chip-btn" + (states.has(key) ? " on" : "") + " st-" + key, label);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      if (states.has(key)) states.delete(key); else states.add(key);
+      if (!states.size) states.add(key);
+      store.set("anom-states", [...states].join(","));
+      b.classList.toggle("on", states.has(key));
+      draw();
+    });
+    bar.append(b);
+  }
+  const search = el("input", "list-search anom-search"); search.type = "search"; search.placeholder = "Search service, dashboard or line";
+  search.value = store.get("anom-search") || "";
+  search.addEventListener("input", () => { store.set("anom-search", search.value); draw(); });
+  bar.append(search);
+  main.append(bar);
+  const tree = el("div", "anom-tree");
+  main.append(tree);
+  const fold = (key, node, body) => {                         // collapsible level, remembered
+    const k = "anom-fold:" + key, open = store.get(k) !== "0";
+    body.hidden = !open; node.querySelector(".chev").textContent = open ? "▾" : "▸";
+    node.addEventListener("click", () => { body.hidden = !body.hidden; store.set(k, body.hidden ? "0" : "1"); node.querySelector(".chev").textContent = body.hidden ? "▸" : "▾"; });
+  };
+  const counts = (c) => {
+    const s = el("span", "lvl-counts");
+    if (c.open) s.append(el("span", "badge hot", "● " + c.open + " open"));
+    if (c.waiting) s.append(el("span", "badge warm", "● " + c.waiting + " need" + (c.waiting === 1 ? "s" : "") + " a reason"));
+    s.append(el("span", "muted", c.all + " total"));
+    return s;
+  };
+  const level = (cls, title, sub, c) => {
+    const n = el("button", "lvl " + cls); n.type = "button";
+    n.append(el("span", "chev", "▾"), el("span", "lvl-title", title));
+    if (sub) n.append(el("span", "muted lvl-sub", sub));
+    n.append(counts(c));
+    return n;
+  };
+  function draw() {
+    tree.textContent = "";
+    const groups = groupAnomalies(states, search.value);
+    if (!groups.length) { tree.append(el("div", "empty", "No anomaly matches.")); return; }
+    for (const r of groups) {
+      const rn = level("lvl-region", r.label, r.site, r.c), rb = el("div", "lvl-body");
+      tree.append(rn, rb); fold("r|" + r.site, rn, rb);
+      for (const d of r.dashboards) {
+        const dn = level("lvl-dash", d.dashboard.title, null, d.c), db = el("div", "lvl-body");
+        rb.append(dn, db); fold("d|" + r.site + "|" + d.dashboard.id, dn, db);
+        for (const s of d.services) {
+          const sn = level("lvl-svc", s.name, null, s.c), sb = el("div", "lvl-body");
+          db.append(sn, sb); fold("s|" + d.dashboard.id + "|" + s.name, sn, sb);
+          for (const { inc, state } of s.list) sb.append(anomalyRow(inc, state, d.dashboard, r.label));
+        }
+      }
+    }
+  }
+  draw();
+  main._redrawAnomalies = draw;
+}
+
+function anomalyRow(inc, state, dashboard, regionLabel) {
+  const row = el("div", "anom st-" + state);
+  const head = el("div", "anom-head");
+  const label = { open: "● open", waiting: "● needs a reason", closed: "closed", past: "past · found in backfill" }[state];
+  const start = Number(inc.started_ms), end = Number(inc.ended_ms);
+  let title = inc.title || "";
+  while (regionLabel && title.startsWith(regionLabel + " · ")) title = title.slice(regionLabel.length + 3);   // the region is the level above
+  head.append(el("span", "anom-state", label), el("span", "anom-what", title),
+    el("span", "muted", shortTime(start) + " · " + (end ? "lasted " + duration(end - start) : "for " + duration(Date.now() - start))));
+  row.append(head);
+  if (inc.reason && state !== "open" && state !== "waiting") row.append(el("div", "anom-reason muted", "Reason: " + inc.reason));
+  const lines = el("div", "anom-lines");
+  const widgetOf = (s) => { const i = lineInfo.get(s.series_id); const p = i && i.places.find((x) => x.dashboard.id === dashboard.id); return p ? p.panel.title : ""; };
+  const sorted = [...(inc.series || [])].sort((a, b) => widgetOf(a).localeCompare(widgetOf(b)) || tagsText(a.group_tags).localeCompare(tagsText(b.group_tags)));
+  for (const s of sorted) {
+    const info = lineInfo.get(s.series_id);
+    const onThis = !info || info.places.some((p) => p.dashboard.id === dashboard.id);
+    if (!onThis) continue;
+    const a = el("a", "anom-line" + (s.bau ? " bau" : ""));
+    a.href = "#/dashboard/" + encodeURIComponent(dashboard.id) + "?line=" + s.series_id;
+    const where = info ? info.places.find((p) => p.dashboard.id === dashboard.id) : null;
+    a.append(el("span", "al-tags", (where ? where.panel.title + " · " : "") + (tagsText(s.group_tags) || s.metric)),
+      el("span", "muted", (s.signal || "line") + " " + (s.reason || "") + (s.reason === "silent" ? "" : " · " + change(s)) + (s.bau ? " · BAU" : s.explanation ? " · reason given" : "")));
+    lines.append(a);
+  }
+  row.append(lines);
+  return row;
+}
 
 // ---- start -------------------------------------------------------------------------------------------------------
 (async function start() {

@@ -97,3 +97,23 @@ a.dl-row:hover { background: var(--hover); } .dl-title { font-weight: 550; color
 
 /* shared crosshair: the line shows on every graph, the tooltip only on the one under the pointer (K5) */
 .dd-grid .chart:not(.hovering) > div[style*="z-index: 9999999"] { display: none !important; }
+
+/* group-anomalies: region › dashboard › service › anomaly */
+.anom-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 12px; }
+.chip-btn { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 14px; padding: 4px 11px; cursor: pointer; font: inherit; font-size: 12px; }
+.chip-btn.on { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.chip-btn.st-open.on { color: var(--red); } .chip-btn.st-waiting.on { color: var(--amber); }
+.anom-search { margin: 0 0 0 8px; width: min(320px, 100%); }
+.anom-tree { display: flex; flex-direction: column; }
+.lvl { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; font: inherit; background: none; border: 0; color: var(--text); cursor: pointer; padding: 7px 8px; border-radius: 4px; }
+.lvl:hover { background: var(--hover); }
+.lvl-region { font-size: 15px; font-weight: 650; border-bottom: 1px solid var(--line); margin-top: 10px; }
+.lvl-dash { font-weight: 600; padding-left: 22px; }
+.lvl-svc { font-weight: 550; padding-left: 40px; }
+.lvl-sub { font-size: 11px; } .lvl-counts { margin-left: auto; display: flex; gap: 10px; font-size: 12px; }
+.lvl-body > .anom { margin: 4px 0 6px 58px; }
+.anom-lines { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.anom-line { display: flex; gap: 10px; flex-wrap: wrap; color: var(--text); text-decoration: none; font-size: 12.5px; padding: 2px 4px; border-radius: 3px; }
+.anom-line:hover { background: var(--hover); color: var(--accent); } .anom-line.bau { opacity: .6; }
+.anom.st-waiting { border-left-color: var(--amber); } .anom.st-closed { border-left-color: var(--grey); }
+@media (max-width: 760px) { .lvl-dash { padding-left: 10px; } .lvl-svc { padding-left: 20px; } .lvl-body > .anom { margin-left: 10px; } .lvl-counts { margin-left: 0; } }
