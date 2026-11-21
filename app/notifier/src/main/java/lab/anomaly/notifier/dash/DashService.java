@@ -106,6 +106,10 @@ public class DashService implements DisposableBean {
 
     /** Datadog's default rollup for a query: its own {@code .rollup(method)}, else sum for {@code .as_count()}, else avg. */
     static lab.anomaly.contracts.v1.Rollup method(String query) {
+        int where = query == null ? -1 : query.indexOf("  where  ");
+        if (where >= 0) {
+            return formulaMethod(query.substring(0, where), query.substring(where + 9));
+        }
         String q = query == null ? "" : query.replaceAll("\\.rollup\\(max, *10\\)\\s*$", "");   // our own step rollup
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\.rollup\\(\\s*(avg|sum|min|max)").matcher(q);
         String found = null;
@@ -121,6 +125,20 @@ public class DashService implements DisposableBean {
             };
         }
         return q.contains(".as_count()") ? lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM : lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG;
+    }
+
+    /**
+     * A formula line (fix-backfill-faults F5): its values are the formula's results, so a ratio or percentage is
+     * averaged per graph step; only a plain sum or difference of queries that are themselves summed is summed.
+     */
+    static lab.anomaly.contracts.v1.Rollup formulaMethod(String formula, String queries) {
+        boolean plain = formula.matches("[\\sA-Za-z0-9_.+\\-()]*") && !formula.matches(".*[A-Za-z_][A-Za-z0-9_]*\\s*\\(.*");
+        boolean allSums = !queries.isBlank();
+        for (String part : queries.split(";")) {
+            int eq = part.indexOf('=');
+            allSums &= eq > 0 && method(part.substring(eq + 1).strip()) == lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM;
+        }
+        return plain && allSums ? lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM : lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG;
     }
 
     /**

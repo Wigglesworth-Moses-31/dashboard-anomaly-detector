@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import lab.anomaly.contracts.v1.DaySummaryRequest;
 import lab.anomaly.contracts.v1.HistoryChunk;
 import lab.anomaly.contracts.v1.HistoryRequest;
@@ -215,5 +216,20 @@ class StoreDatabaseLiveTest {
         SeriesSummary w = window.stream().filter(s -> s.getSeriesId().equals(A)).findFirst().orElseThrow();
         assertThat(d.getCount()).isEqualTo(w.getCount()).isEqualTo(1440);
         assertThat(List.of(d.getMin(), d.getMax(), d.getMean(), d.getP95())).isEqualTo(List.of(w.getMin(), w.getMax(), w.getMean(), w.getP95()));
+    }
+
+    /** redesign-dashboard R1: the newest saved time of each line in the last 25 hours. */
+    @Test
+    void newestTimeOfEachLine() throws Exception {
+        long now = (System.currentTimeMillis() / 10_000) * 10_000;
+        long nineHoursAgo = now - 9 * 3_600_000L;
+        for (long t : new long[] {nineHoursAgo - 20_000, nineHoursAgo - 10_000, nineHoursAgo}) {
+            jdbc.update("INSERT INTO metrics.points (series_id, ts, value) VALUES (?, ?, 1)", A, new java.sql.Timestamp(t));
+        }
+        jdbc.update("INSERT INTO metrics.points (series_id, ts, value) VALUES (?, ?, 1)", B, new java.sql.Timestamp(now - 30 * 3_600_000L));
+        List<lab.anomaly.contracts.v1.SeriesNewest> answer = call("getNewest", lab.anomaly.contracts.v1.NewestRequest.getDefaultInstance());
+        Map<String, Long> mine = new java.util.HashMap<>();
+        answer.stream().filter(n -> n.getSeriesId().startsWith("ffff")).forEach(n -> mine.put(n.getSeriesId(), n.getNewestMs()));
+        assertThat(mine).as("A's newest value; B is older than 25 hours").containsExactly(Map.entry(A, nineHoursAgo));
     }
 }

@@ -58,6 +58,30 @@ public final class Window {
             size--;
             remove(gone);
         }
+        if (low.size() + high.size() > 2 * size + 16) {
+            rebuild();                                      // fix-backfill-faults F2: stale entries never pile up
+        }
+    }
+
+    /** Entries held by both heaps, live and stale (for tests: stays below 2 × size + 16 after every add). */
+    public int heapEntries() {
+        return low.size() + high.size();
+    }
+
+    /**
+     * Lazy deletion only drops a stale value when it reaches a heap top; values deep inside stayed for ever (24 h of
+     * values left 8,640 entries for 180 live ones). Rebuilding from the ring buffer is O(w log w), needed at most once
+     * every ~w adds, so add stays O(log w) amortised.
+     */
+    private void rebuild() {
+        low.clear();
+        high.clear();
+        delayed.clear();
+        lowSize = 0;
+        highSize = 0;
+        for (int i = 0; i < size; i++) {
+            insert(values[(head + i) % values.length]);
+        }
     }
 
     /** The median of the values in the window; NaN when empty. */

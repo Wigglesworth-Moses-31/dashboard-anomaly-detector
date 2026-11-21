@@ -122,7 +122,14 @@ public class StorageHousekeeping {
         long minute = 60_000;
         java.sql.Timestamp from = new java.sql.Timestamp((late[0] / minute) * minute);
         java.sql.Timestamp to = new java.sql.Timestamp((late[1] / minute + 1) * minute);
-        jdbc.update("CALL refresh_continuous_aggregate('metrics.points_1m', ?, ?)", from, to);
+        try {
+            // The procedure takes "any": PostgreSQL cannot infer ? without a cast (fix-backfill-faults F1)
+            jdbc.update("CALL refresh_continuous_aggregate('metrics.points_1m', ?::timestamptz, ?::timestamptz)", from, to);
+        } catch (RuntimeException e) {
+            stats.noteLate(late[0]);                         // give the range back: tried again next run (F1)
+            stats.noteLate(late[1]);
+            throw e;
+        }
         log.info("Per-minute summaries refreshed for late values {} .. {}", from.toInstant(), to.toInstant());
     }
 

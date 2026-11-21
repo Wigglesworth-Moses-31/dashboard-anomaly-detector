@@ -71,6 +71,15 @@ public class HistoryRepository {
                 }));
     }
 
+    /** redesign-dashboard R1: each line's newest saved time over the last 25 hours, one pass. */
+    public void newest(java.util.function.ObjLongConsumer<String> each) {
+        readOnly.executeWithoutResult(status -> streaming.query(
+                "SELECT series_id, max(ts) FROM metrics.points WHERE ts > now() - interval '25 hours' GROUP BY series_id",
+                rs -> {
+                    each.accept(rs.getString(1), rs.getTimestamp(2).getTime());
+                }));
+    }
+
     /**
      * Points of many lines in [from, to), per line oldest first, in chunks of at most {@link #CHUNK} that never mix
      * lines (add-dashboard-view D1). Raw: the 10-second values. Per minute: two points per minute, its lowest value at

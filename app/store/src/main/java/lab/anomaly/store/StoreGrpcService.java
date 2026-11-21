@@ -145,6 +145,19 @@ class StoreGrpcService extends StoreServiceGrpc.StoreServiceImplBase {
         }
     }
 
+    /** redesign-dashboard R1: the newest saved time of every line with values in the last 25 hours. */
+    @Override
+    public void getNewest(lab.anomaly.contracts.v1.NewestRequest request,
+                          StreamObserver<lab.anomaly.contracts.v1.SeriesNewest> out) {
+        try {
+            history.newest((id, ms) -> out.onNext(lab.anomaly.contracts.v1.SeriesNewest.newBuilder()
+                    .setSeriesId(id).setNewestMs(ms).build()));
+            out.onCompleted();
+        } catch (RuntimeException e) {
+            out.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
     /** add-dashboard-view D1: many lines, one range; at most 1000 lines. */
     @Override
     public void getHistoryBatch(lab.anomaly.contracts.v1.HistoryBatchRequest request, StreamObserver<HistoryChunk> chunks) {

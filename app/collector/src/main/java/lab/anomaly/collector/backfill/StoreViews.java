@@ -3,6 +3,7 @@ package lab.anomaly.collector.backfill;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +21,11 @@ public class StoreViews implements AutoCloseable {
     @FunctionalInterface
     public interface Collected {
         Optional<Set<String>> views();
+
+        /** redesign-dashboard R1: "site|view id" → newest saved value of its lines (UTC ms); empty when unknown. */
+        default java.util.Map<String, Long> newest() {
+            return java.util.Map.of();
+        }
     }
 
     private final Supplier<String> address;
@@ -27,10 +33,14 @@ public class StoreViews implements AutoCloseable {
     private String channelAddress;
     private Set<String> cached;
     private long cachedAtMs;
+    private java.util.Map<String, Long> newestCached = java.util.Map.of();
 
     public StoreViews(Supplier<String> address) {
         this.address = address;
     }
+
+    /** Key present in {@link #newest()} when the Store answered (an older Store has no such call). */
+    public static final String ANSWERED = "";
 
     public static String key(String site, String viewId) {
         return site + "|" + viewId;
@@ -43,14 +53,34 @@ public class StoreViews implements AutoCloseable {
         }
         try {
             Set<String> out = new HashSet<>();
+            java.util.Map<String, List<String>> viewsOfLine = new java.util.HashMap<>();
             stub().withDeadlineAfter(30, TimeUnit.SECONDS).listSeries(ListSeriesRequest.getDefaultInstance())
-                    .forEachRemaining(d -> d.getViewsList().forEach(v -> out.add(key(d.getSource().getInstance(), v.getViewId()))));
+                    .forEachRemaining(d -> d.getViewsList().forEach(v -> {
+                        String k = key(d.getSource().getInstance(), v.getViewId());
+                        out.add(k);
+                        viewsOfLine.computeIfAbsent(d.getSeriesId(), x -> new java.util.ArrayList<>()).add(k);
+                    }));
+            // A view's gap starts where its freshest line stopped (a line that left the dashboard stays old)
+            java.util.Map<String, Long> newest = new java.util.HashMap<>();
+            try {
+                stub().withDeadlineAfter(60, TimeUnit.SECONDS).getNewest(lab.anomaly.contracts.v1.NewestRequest.getDefaultInstance())
+                        .forEachRemaining(n -> viewsOfLine.getOrDefault(n.getSeriesId(), List.of())
+                                .forEach(k -> newest.merge(k, n.getNewestMs(), Math::max)));
+                newest.put(ANSWERED, 0L);                       // the Store answers: a view missing here has no recent value
+            } catch (RuntimeException e) {
+                newest.clear();                                 // an older Store: no catch-up, as before
+            }
+            newestCached = java.util.Map.copyOf(newest);
             cached = out;
             cachedAtMs = now;
             return Optional.of(out);
         } catch (RuntimeException e) {
             return Optional.empty();
         }
+    }
+
+    public synchronized java.util.Map<String, Long> newest() {
+        return newestCached;
     }
 
     /** Forget the cache (a backfill just added views). */

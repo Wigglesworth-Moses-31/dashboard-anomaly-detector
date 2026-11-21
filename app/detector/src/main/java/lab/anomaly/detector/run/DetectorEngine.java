@@ -168,6 +168,12 @@ public class DetectorEngine {
                 }
                 snapshot = detector.view();
                 long now = System.currentTimeMillis();
+                if (now >= nextSizeLog) {                                    // fix-backfill-faults F3: growth shows early
+                    Runtime rt = Runtime.getRuntime();
+                    log.info("Size: {} lines watched, heap {} MB used of {} MB", snapshot.lines(),
+                            (rt.totalMemory() - rt.freeMemory()) >> 20, rt.maxMemory() >> 20);
+                    nextSizeLog = now + 60_000;
+                }
                 if (now >= nextLag) {
                     updateLag(c);
                     nextLag = now + 5_000;
@@ -200,6 +206,7 @@ public class DetectorEngine {
         return any;
     }
 
+    private long nextSizeLog;
     private long nextReannounce;                                       // 0: the first loop announces restored waiting incidents
     static final long REANNOUNCE_EVERY_MS = 12 * 3_600_000L;
 

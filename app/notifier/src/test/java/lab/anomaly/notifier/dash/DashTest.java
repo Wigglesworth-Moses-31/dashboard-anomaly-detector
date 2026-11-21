@@ -131,6 +131,14 @@ class DashTest {
         assertThat(DashService.method("sum:lab.api.request.count{*} by {status}.as_count().rollup(max, 10)")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM);
         assertThat(DashService.method("avg:x{*}.rollup(min, 60).rollup(max, 10)")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_MIN);
         assertThat(DashService.method("")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+        // fix-backfill-faults F5: a percentage made of counts is averaged, never summed
+        String q1 = "sum:lab.api.request.count{status_code:2*} by {api}.as_count().rollup(sum, 10)";
+        String q2 = "sum:lab.api.request.count{*} by {api}.as_count().rollup(sum, 10)";
+        assertThat(DashService.method("query1 / query2 * 100  where  query1 = " + q1 + "; query2 = " + q2)).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+        assertThat(DashService.method("100 * (1 - errs / hits)  where  hits = " + q2 + "; errs = " + q1)).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+        assertThat(DashService.method("query1 + query2  where  query1 = " + q1 + "; query2 = " + q2)).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_SUM);
+        assertThat(DashService.method("abs(query1 - query2)  where  query1 = " + q1 + "; query2 = " + q2)).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
+        assertThat(DashService.method("query1 + query2  where  query1 = " + q1 + "; query2 = avg:lab.api.latency{*}")).isEqualTo(lab.anomaly.contracts.v1.Rollup.ROLLUP_AVG);
     }
 
     @Test

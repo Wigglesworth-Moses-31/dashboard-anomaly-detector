@@ -643,4 +643,50 @@ class MultiSiteTest {
         waitUntil(() -> sent.stream().anyMatch(MetricPoints::getBackfill), 15_000);
         waitUntil(() -> sent.stream().anyMatch(m -> !m.getBackfill()), 5_000);
     }
+
+    /** redesign-dashboard R1: a collected view whose newest value is {@code ageMs} old; what the catch-up sends. */
+    private java.util.List<MetricPoints> catchUp(long ageMs) throws Exception {
+        java.util.List<MetricPoints> sent = java.util.Collections.synchronizedList(new ArrayList<>());
+        current.set(settings(source("us", "datadoghq.com", "d1")));
+        engine = new CollectorEngine(current::get, version::get,
+                c -> DatadogCredentials.fromEnvironment(env, c.apiKeyEnv(), c.appKeyEnv(), c.name()),
+                (c, credentials, clock) -> new BackfillSite(c.site()), null, Clock.systemUTC());
+        long newest = System.currentTimeMillis() - ageMs;
+        engine.setCollectedViews(new lab.anomaly.collector.backfill.StoreViews.Collected() {
+            @Override public Optional<java.util.Set<String>> views() { return Optional.of(java.util.Set.of("datadoghq.com|d1")); }
+            @Override public Map<String, Long> newest() {
+                return Map.of("datadoghq.com|d1", newest, lab.anomaly.collector.backfill.StoreViews.ANSWERED, 0L);
+            }
+        }, Duration.ofHours(24), Duration.ofHours(4), 0);
+        engine.startLive(new MessageSink() {
+            @Override public void send(SeriesDescriptor d) { }
+            @Override public void send(MetricPoints p) { sent.add(p); }
+        });
+        waitUntil(() -> engine.lane("us") != null && engine.lane("us").unitCount() == 3, 3000);
+        waitUntil(() -> sent.stream().anyMatch(m -> !m.getBackfill()), 10_000);              // live polling has started
+        waitUntil(() -> engine.held().isEmpty(), 3000);
+        engine.stop();
+        return sent.stream().filter(MetricPoints::getBackfill).toList();
+    }
+
+    @Test
+    void aNineHourGapIsFilledFromTheNewestValue() throws Exception {
+        long start = System.currentTimeMillis() - Duration.ofHours(9).toMillis();
+        java.util.List<MetricPoints> filled = catchUp(Duration.ofHours(9).toMillis());
+        assertThat(filled).as("3 panels × 3 windows of 4 hours").hasSize(9);
+        assertThat(filled.get(0).getPoints(0).getTsMs()).isBetween(start - 20_000, start + 20_000);
+    }
+
+    @Test
+    void aThreeDayGapFillsOnlyTheLastDay() throws Exception {
+        long dayAgo = System.currentTimeMillis() - Duration.ofHours(24).toMillis();
+        java.util.List<MetricPoints> filled = catchUp(Duration.ofDays(3).toMillis());
+        assertThat(filled).as("3 panels × 6 windows of 4 hours").hasSize(18);
+        assertThat(filled.get(0).getPoints(0).getTsMs()).isBetween(dayAgo - 20_000, dayAgo + 20_000);
+    }
+
+    @Test
+    void aShortRestartCatchesUpNothing() throws Exception {
+        assertThat(catchUp(30_000)).isEmpty();
+    }
 }

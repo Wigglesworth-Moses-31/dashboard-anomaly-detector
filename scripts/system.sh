@@ -26,14 +26,14 @@ start_service() {  # name port [with-datadog-keys]
   if [ "${3:-}" = "with-db-password" ]; then
     # Only the database password from .env, into this one process; never echoed
     ( export PLATFORM_DB_PASSWORD="$(grep -E '^PLATFORM_DB_PASSWORD=' "$ROOT/.env" | cut -d= -f2-)"
-      exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
+      exec java -Xmx512m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   elif [ "${3:-}" = "with-datadog-keys" ]; then
     # The Collector reads its Datadog keys itself from .env on every settings reload (add-settings-page S4): only
     # the file's path is passed, never a key; it reads Datadog key names only, never the database password
     ( export LAB_ENV_FILE="$ROOT/.env"
-      exec java -Xmx256m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
+      exec java -Xmx512m -jar "$jar" ) > "$RUN/$name.log" 2>&1 &
   else
-    java -Xmx256m -jar "$jar" > "$RUN/$name.log" 2>&1 &
+    java -Xmx512m -jar "$jar" > "$RUN/$name.log" 2>&1 &
   fi
   echo $! > "$RUN/$name.pid"
   if wait_for "localhost:$port/actuator/health" 90; then
@@ -65,6 +65,7 @@ start() {
   "${COMPOSE[@]}" up -d 2>&1 | grep -E "Started|Running" | sed 's/^/  /' || true
   "$ROOT/platform/create-topics.sh" 2>/dev/null | sed 's/^/  topic: /'
   "$ROOT/platform/install-config-hook.sh" >/dev/null
+  "$ROOT/scripts/check-config.sh"
   echo "Config Service:"
   export CONFIG_REPO_URI
   CONFIG_REPO_URI="$(python3 -I -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$ROOT/config-repo")"

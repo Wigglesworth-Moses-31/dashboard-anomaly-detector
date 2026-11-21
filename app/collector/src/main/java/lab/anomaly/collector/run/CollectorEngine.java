@@ -127,7 +127,10 @@ public class CollectorEngine {
                 environment, Clock.systemUTC(), (lane, s) -> files.views(s, lane.name()));
         lab.anomaly.collector.backfill.StoreViews store = new lab.anomaly.collector.backfill.StoreViews(
                 () -> environment.getProperty("anomaly.collector.store-address", "localhost:9102"));
-        this.collected = store::views;                                  // add-backfill B2
+        this.collected = new lab.anomaly.collector.backfill.StoreViews.Collected() {   // add-backfill B2
+            @Override public java.util.Optional<Set<String>> views() { return store.views(); }
+            @Override public Map<String, Long> newest() { return store.newest(); }      // redesign-dashboard R1
+        };
     }
 
     /** For tests: stub sources, keys and clock; dashboards read by id from the stub source. */
@@ -416,6 +419,7 @@ public class CollectorEngine {
     private final Map<String, Long> backfillRecheckMs = new ConcurrentHashMap<>();   // lane → when to ask the Store again
     private final Map<String, Long> storeWaitSinceMs = new ConcurrentHashMap<>();
     private final Set<String> backfillRunning = ConcurrentHashMap.newKeySet();       // lanes with a job running
+    private final Map<String, Long> backfillSince = new ConcurrentHashMap<>();      // lane → oldest time being filled (R1)
 
     public void setCollectedViews(lab.anomaly.collector.backfill.StoreViews.Collected collected, Duration span, Duration window, long pauseMs) {
         this.collected = collected;
@@ -482,6 +486,11 @@ public class CollectorEngine {
         backfillRecheckMs.remove(lane.name());
         List<PollUnit> toFill = new ArrayList<>();
         Map<String, String> newViews = new LinkedHashMap<>();
+        Map<String, Long> starts = new HashMap<>();                       // unit id → first time to fill
+        Map<String, Long> newest = collected.newest();
+        long stepMs = settings.get().step().toMillis();
+        long oldest = ((now - backfillSpan().toMillis()) / stepMs) * stepMs;
+        long caughtUp = now - settings.get().backfill().toMillis();      // the first live poll covers this much
         for (String id : lane.unitIds) {
             PollUnit unit = units.get(id);
             if (unit == null || polledOnce.contains(id)) {
@@ -490,9 +499,21 @@ public class CollectorEngine {
             }
             Set<String> keys = viewKeys(lane, unit);
             boolean allNew = keys.stream().allMatch(k -> !have.get().contains(k) && !backfilled.contains(k));
+            Long start = null;
             if (allNew) {
+                start = oldest;
+            } else if (keys.stream().noneMatch(backfilled::contains)) {
+                // redesign-dashboard R1: a collected view whose newest value is older than the first poll covers
+                long none = newest.containsKey(lab.anomaly.collector.backfill.StoreViews.ANSWERED) ? Long.MIN_VALUE : Long.MAX_VALUE;
+                long last = keys.stream().mapToLong(k -> newest.getOrDefault(k, none)).min().orElse(Long.MAX_VALUE);
+                if (last < caughtUp) {
+                    start = Math.max(oldest, (last / stepMs) * stepMs);
+                }
+            }
+            if (start != null) {
                 held.add(id);
                 toFill.add(unit);
+                starts.put(id, start);
                 unit.views().forEach(v -> newViews.putIfAbsent(lab.anomaly.collector.backfill.StoreViews.key(lane.config().site(), v.dashboardId()),
                         v.dashboardTitle()));
             } else {
@@ -503,22 +524,32 @@ public class CollectorEngine {
         if (toFill.isEmpty() || !backfillRunning.add(lane.name())) {
             return;                                     // nothing new, or this lane's job is running (it re-plans at its end)
         }
-        long windows = Math.max(1, (backfillSpan().toMillis() + backfillWindow().toMillis() - 1) / backfillWindow().toMillis());
+        long first = starts.values().stream().mapToLong(Long::longValue).min().orElse(oldest);
+        long windows = Math.max(1, (now - first + backfillWindow().toMillis() - 1) / backfillWindow().toMillis());
         newViews.forEach((k, title) -> backfillProgress.put(k, new Object[] {0L, windows, title}));
-        log.info("[{}] Backfill: {} new views ({}), {} questions, last {} in {} windows", lane.name(), newViews.size(),
-                String.join(", ", newViews.values()), toFill.size(), backfillSpan(), windows);
+        boolean catchUp = toFill.stream().anyMatch(u -> starts.get(u.id()) > oldest);
+        log.info("[{}] {}: {} views ({}), {} questions, from {} in {} windows", lane.name(), catchUp ? "Catch-up" : "Backfill",
+                newViews.size(), String.join(", ", newViews.values()), toFill.size(), java.time.Instant.ofEpochMilli(first), windows);
         List<PollUnit> fill = List.copyOf(toFill);
         Set<String> views = Set.copyOf(newViews.keySet());
-        workers.submit(() -> runBackfill(lane, fill, views));
+        Map<String, Long> from = Map.copyOf(starts);
+        backfillSince.put(lane.name(), first);
+        workers.submit(() -> runBackfill(lane, fill, views, from));
     }
 
     /** One lane's backfill: windows oldest first, batched like polls, through the lane's fetcher (rate gate, 429 wait). */
     private void runBackfill(Lane lane, List<PollUnit> fill, Set<String> views) {
+        runBackfill(lane, fill, views, Map.of());
+    }
+
+    /** {@code starts}: unit id → first time to fill (a catch-up starts at the view's newest value); missing = the full span. */
+    private void runBackfill(Lane lane, List<PollUnit> fill, Set<String> views, Map<String, Long> starts) {
         CollectorSettings s = settings.get();
         long stepMs = s.step().toMillis();
         long now = clock.millis();
         long to = (now / stepMs) * stepMs;
-        long from = ((to - backfillSpan().toMillis()) / stepMs) * stepMs;
+        long full = ((to - backfillSpan().toMillis()) / stepMs) * stepMs;
+        long from = fill.stream().mapToLong(u -> starts.getOrDefault(u.id(), full)).min().orElse(full);
         long window = Math.max(stepMs, (backfillWindow().toMillis() / stepMs) * stepMs);
         int lines = 0;
         try {
@@ -528,8 +559,11 @@ public class CollectorEngine {
                     return;
                 }
                 long wEnd = Math.min(to, w + window);
-                for (Batch b : Batch.pack(fill, s.effectiveBatchFormulas())) {
-                    lines += backfillAsk(lane, b, s, w, wEnd);
+                final long windowEnd = wEnd;
+                List<PollUnit> due = fill.stream().filter(u -> starts.getOrDefault(u.id(), full) < windowEnd).toList();
+                for (Batch b : Batch.pack(due, s.effectiveBatchFormulas())) {
+                    long ask = Math.max(w, b.units().stream().mapToLong(u -> starts.getOrDefault(u.id(), full)).min().orElse(w));
+                    lines += backfillAsk(lane, b, s, ask, wEnd);
                     Thread.sleep(backfillPauseMs);                         // leaves room for live polls
                 }
                 views.forEach(v -> backfillProgress.computeIfPresent(v, (k, p) -> new Object[] {(Long) p[0] + 1, p[1], p[2]}));
@@ -540,6 +574,7 @@ public class CollectorEngine {
             Thread.currentThread().interrupt();
         } finally {
             views.forEach(backfillProgress::remove);
+            backfillSince.remove(lane.name());
             fill.forEach(u -> held.remove(u.id()));
             backfillRunning.remove(lane.name());
             backfillRecheckMs.put(lane.name(), clock.millis());          // anything added meanwhile is planned next
@@ -581,6 +616,11 @@ public class CollectorEngine {
         backfillProgress.forEach((k, p) -> out.put(p[2] + " (" + k.substring(0, k.indexOf('|')) + ")",
                 Math.round(100.0 * (Long) p[0] / Math.max(1L, (Long) p[1])) + "%"));
         return out;
+    }
+
+    /** Oldest time being filled per lane while a backfill or catch-up runs (page: "Catching up 9 h · 40%"). */
+    public Map<String, Long> backfillSince() {
+        return Map.copyOf(backfillSince);
     }
 
     Set<String> held() {

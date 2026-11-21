@@ -25,6 +25,9 @@ service StoreService {
   // Points of many lines (at most 1000) over one range, each chunk naming its line (add-dashboard-view, design D1).
   // At MINUTE resolution each minute gives two points: its lowest value at the minute and its highest 30 s later.
   rpc GetHistoryBatch (HistoryBatchRequest) returns (stream HistoryChunk);
+  // The newest saved time of every line with values in the last 25 hours (added by redesign-dashboard, design R1):
+  // the Collector catches up the gap since then at start.
+  rpc GetNewest (NewestRequest) returns (stream SeriesNewest);
 }
 
 message ListSeriesRequest {}
@@ -109,4 +112,11 @@ message SeriesSummary {
   double p95 = 6;                       // exact (computed over the raw points of the window)
   int64 from_ms = 7;
   int64 to_ms = 8;
+}
+
+message NewestRequest {}
+
+message SeriesNewest {
+  string series_id = 1;
+  int64 newest_ms = 2;                  // UTC milliseconds of the line's newest saved value
 }

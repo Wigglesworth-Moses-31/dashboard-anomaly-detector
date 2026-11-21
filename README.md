@@ -35,7 +35,7 @@ outside the code. The design, every requirement and how each was verified are in
 | Per source, a Datadog **API key** | Organization settings → API keys |
 | Per source, an **application key** with read scopes | Organization settings → Application keys. Scopes: `timeseries_query`, `metrics_read` (plus `dashboards_read` only for the optional export helper). **Both keys are needed**: the API key says which account, the application key what may be read |
 | Each dashboard as an **exported JSON file** | In Datadog: open the dashboard → **Share → Export dashboard JSON** (or ⚙ → Export). Save the `.json` file. Its saved views (presets) and variable defaults decide the filters |
-| **Docker** with Compose v2 | Docker Desktop, Colima, or Docker Engine. About 1.5 GB of memory for Kafka and the database |
+| **Docker** with Compose v2 | Docker Desktop, Colima, or Docker Engine. About 1.5 GB of memory for Kafka and the database, plus up to 512 MB for each of the 6 Java services |
 | **Java 25** | e.g. `brew install openjdk@25`, `sdk install java 25-tem`, or your package manager. `java -version` must say 25 |
 | git, curl, python3 | Usually already there |
 
@@ -83,7 +83,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | **Live dashboards that look and work like Datadog's**: a slim left bar (one entry per region, Settings, and the counter "● 3 open · 2 need a reason"); per region a searchable **dashboard list** with badges; each **dashboard laid out from its exported JSON** (the 12-column grid with each widget's position and size, coloured group boxes; dashboards without positions flow in order), template variables as chips, a **time picker** (Past 15 Minutes, 30 Minutes, 1, 3, 6, 12 Hours, 1 Day) with Datadog's **auto interval** (10 s … 5 m, at most 300 points; average, or sum for counts) and live updates at every range (❚❚ pauses). Widgets are drawn by type: timeseries as lines, bars or areas with their palette, query values as big numbers with their colours, top lists, tables, sunbursts, split groups, notes; widgets without metrics show "not collected". Hovering a graph shows the same moment on every graph; **⤢** opens a widget full screen with a min/max/avg/value table; clicking a line or a red anomaly band opens its **side panel** with details, its anomalies of the last 24 hours and the reason box (per line, or the same reason for every line of the anomaly). BAU and past ("found in backfill") anomalies are grey and need no reason. The **Anomalies** page lists every anomaly of the last 24 hours as **region › dashboard › service › anomaly** (service = the incident's group, e.g. `api /v1/invoices`), with open and waiting counts at every level, worst services first and newest anomalies first, state filters and a search; each line opens its side panel. 🔔 and 🔊 notify new anomalies. Light or dark follows the computer. Charts exist only near the screen and live values are sent only for those |
+| http://localhost:8104 | **Live dashboards that look and work like Datadog's**. A **top bar** always shows the region (US · EU), a **dashboard picker** (type to search; each with its open anomalies), the time picker (Past 15 Minutes … 1 Day) with Datadog's **auto interval** (10 s … 5 m, at most 300 points; average, or sum for counts; formula lines are averaged), Live (❚❚ pauses), **Comfortable / Compact** and the **graph size − 100% +**; the left bar has Dashboards, Anomalies, Settings and the counter "● 3 open · 2 need a reason". Each dashboard starts with **Worst anomalies**: its anomalies ranked open first, then needing a reason, then by size × minutes (top 5, "Show all"); a row scrolls to the widget, shows only that line and opens its side panel. Widgets keep the **order and groups of the exported JSON**, but graphs have sizes in page units: **zooming the browser in makes graphs bigger with fewer per row, zooming out makes them smaller with more per row** (the graph size control does the same for graphs only). Split groups draw one graph per tag value, at least 320 × 160, with long titles shortened in the middle. Widgets are drawn by type (timeseries, query values, top lists, tables, sunbursts, split groups, notes); a dot by a title marks an open (red), waiting (amber) or past (grey) anomaly, and a light band marks each anomaly's own time. **Clicking a legend entry shows only that line** (again: all; Ctrl/Cmd-click adds or removes one), also in the full-screen table. Hovering shows the same moment on every graph; **⤢** opens a widget full screen; a line opens its **side panel** with details, its anomalies of the last 24 hours and the reason box. The **Anomalies** page lists every anomaly as **region › dashboard › service › anomaly**. 🔔 and 🔊 notify new anomalies. Light or dark follows the computer. Charts exist only near the screen and live values are sent only for those |
 | `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
@@ -212,7 +212,11 @@ its keys from `.env` itself (start with the new `scripts/system.sh`). A `collect
 regions there. Since 21 Nov 2026: everything is kept 24 hours — in `store.yml` set `raw-safety-limit: 1d`,
 `summary-retention: 1d`, `history-max-range: 1d`; in `detector.yml` `incident-retention: 1d`; in `reporter.yml`
 `catch-up: 1d` (the Kafka topics are changed by `scripts/system.sh start`). Optional: `backfill-new-views: 1d` in
-`collector.yml`; the dashboard `ranges` in `notifier.yml` are 15m, 30m, 1h, 3h, 6h, 12h, 1d by default.
+`collector.yml`; the dashboard `ranges` in `notifier.yml` are 15m, 30m, 1h, 3h, 6h, 12h, 1d by default. Also `max-database-size: 10GB` in `store.yml`.
+
+`scripts/system.sh start` now lists every setting of this kind where your `config-repo` differs from the template
+(`scripts/check-config.sh`, run it any time). It only reads: edit the file it names, then commit in `config-repo`.
+A setting that is missing is not listed, because the service's default is the template's value.
 
 ## Storage stays small
 
@@ -236,8 +240,13 @@ tab, the Collector first pulls its **last 24 hours at 10-second detail** from Da
 oldest first, through the region's own rate limit; then its live polling starts. The Settings tab shows "Pulling the
 last 2 days of Shop: 45%". Anomalies inside those hours are found and listed on the metric pages as **past · found
 in backfill**: closed, no notification, no reason needed; one still going on when they end continues as live.
-A restart or an edit never pulls them again (the Store remembers which views it has). Settings in `collector.yml`:
-`backfill-new-views: 1d` (0s = off, at most 10d), `backfill-window: 4h`.
+A restart or an edit never pulls a new dashboard's day again (the Store remembers which views it has).
+
+**After a shutdown the gap is filled by itself.** At every start the Collector asks the Store for each dashboard's
+newest saved value and pulls the time since then (at most 24 hours) the same way, before live polling. Nothing needs to
+be done before shutting down, so a crash or a power cut is covered too. The top bar shows "Catching up 9 h 0 min · 40%"
+until it is done. Settings in `collector.yml`: `backfill-new-views: 1d` (also the longest catch-up; 0s = off, at most
+10d), `backfill-window: 4h`.
 
 ## Without Datadog (replay)
 

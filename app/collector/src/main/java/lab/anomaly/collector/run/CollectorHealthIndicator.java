@@ -47,6 +47,7 @@ public class CollectorHealthIndicator implements HealthIndicator {
         }
         details.put("sources", sources);
         details.put("backfill", engine.backfills());                  // add-backfill: views being filled with their last days
+        details.put("backfill-since", engine.backfillSince());        // redesign-dashboard R1: oldest time being filled, per lane
         details.put("warnings", warnings);
         return (warnings.isEmpty() ? Health.up() : Health.status(SettingsHealthIndicator.DEGRADED)).withDetails(details).build();
     }

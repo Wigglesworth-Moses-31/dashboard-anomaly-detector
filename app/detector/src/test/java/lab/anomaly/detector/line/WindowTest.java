@@ -111,4 +111,36 @@ class WindowTest {
         assertThat(always.share()).isEqualTo(1.0);
         assertThat(rare.share()).isCloseTo(0.1, offset(0.01));
     }
+
+    /** fix-backfill-faults F2: a day of values keeps the heaps near the window's size, with the same medians. */
+    @Test
+    void aDayOfValuesStaysWithinTheWindow() {
+        long step = 10_000;
+        long history = 1_800_000;                          // 180 values
+        Random r = new Random(7);
+        for (int shape = 0; shape < 4; shape++) {
+            Window w = new Window(16);
+            Deque<double[]> live = new ArrayDeque<>();
+            for (int i = 0; i < 8_640; i++) {             // 24 hours
+                double v = switch (shape) {
+                    case 0 -> i;                           // rising trend: old values sink deep into a heap
+                    case 1 -> -i;
+                    case 2 -> r.nextGaussian() * 100;
+                    default -> 99.5 + r.nextGaussian() * 0.3;
+                };
+                long ts = i * step;
+                w.add(ts, v, history);
+                live.addLast(new double[] {ts, v});
+                while (live.peekFirst()[0] <= ts - history) {
+                    live.removeFirst();
+                }
+                assertThat(w.heapEntries()).isLessThanOrEqualTo(2 * w.size() + 16);
+                if (i % 97 == 0) {
+                    double[] values = live.stream().mapToDouble(p -> p[1]).toArray();
+                    assertThat(w.median()).isEqualTo(bruteMedian(values));
+                }
+            }
+            assertThat(w.size()).isEqualTo(180);
+        }
+    }
 }
