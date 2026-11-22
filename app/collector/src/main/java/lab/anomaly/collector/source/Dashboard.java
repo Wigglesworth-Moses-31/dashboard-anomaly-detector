@@ -34,11 +34,16 @@ public record Dashboard(String id, String title, List<TemplateVariable> variable
     }
 
     /** One panel request: its questions and the formulas built from them. {@code path} = group or section titles. */
-    public record Panel(String title, String path, List<Query> queries, List<String> formulas, Long widgetId) {
+    public record Panel(String title, String path, List<Query> queries, List<String> formulas, Long widgetId, String splitTag) {
         public Panel {
             queries = List.copyOf(queries);
             formulas = List.copyOf(formulas);
             widgetId = widgetId == null ? 0L : widgetId;                   // recordings made before add-datadog-look
+            splitTag = splitTag == null ? "" : splitTag;                   // anomaly-per-graph: "" = not a split group
+        }
+
+        public Panel(String title, String path, List<Query> queries, List<String> formulas, Long widgetId) {
+            this(title, path, queries, formulas, widgetId, "");
         }
 
         /** Without a widget id (0 = not known): tests and sources that have none. */

@@ -49,7 +49,7 @@ public final class Detector {
         this.settings = s;
         this.rules = new RuleBook(s, version);
         this.limits = new LineWatch.Limits(s.history().toMillis(), s.minHistory().toMillis(), s.calmPeriod().toMillis());
-        book.configure(s.groupBy(), s.upstreamTags(), s.calmPeriod().toMillis());
+        book.configure(s.groupBy(), s.upstreamTags(), s.calmPeriod().toMillis(), s.incidentScope());   // + anomaly-per-graph
         book.setBau(s::isBau);                           // business-as-usual anomalies (add-line-reasons L2)
     }
 

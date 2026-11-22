@@ -147,7 +147,9 @@ breaks a rule (for example a 48-hour report window) is **refused**, the old valu
 | Faster alerts, or fewer false drops | `settle-delay` (default 60 s): a step is judged only this long after its end, because Datadog may still be receiving its values. Health shows `lateChanges` per source to tune it |
 | Tell the system what an unknown metric is (latency, count, ratio, gauge) | `collector.yml` → `classification` |
 | Alert more or less sharply, or on new kinds of metrics | `detector.yml` → `rules` (first match wins; any letter case) |
-| Group incidents by another tag (for example `endpoint`) | `detector.yml` → `group-by` |
+| One anomaly per graph (default), or per service tag | `detector.yml` → `incident-scope: graph` (each region › dashboard › panel › small graph of a split group is its own anomaly) or `service` (by the first `group-by` tag a line has, else its dashboard) |
+| Group incidents by another tag (for example `endpoint`), with `incident-scope: service` | `detector.yml` → `group-by` |
+| Which APIs call which upstream service | Settings tab › **Upstreams** (or `upstreams.yml`): per region, `upstream: [api, …]`. An upstream's anomaly then shows **Called by** (each API with its state now), an API's shows **Calls** |
 | Which day is "today" | `application.yml` → `anomaly.shared.time-zone` (default `UTC`) |
 | Which time zones every time is shown in | `application.yml` → `anomaly.shared.display-time-zones` (default `[UTC, Asia/Kolkata, America/New_York]`, the first is the main one) |
 | Reports every 6 hours instead of daily | `reporter.yml` → `window: 6h` (1, 2, 3, 4, 6, 8, 12 or 24 hours) |
@@ -188,7 +190,7 @@ a cautious general rule. After the first hour, look at the Detector's health pag
 | Health shows | Means | Do |
 |---|---|---|
 | `linesOnGeneralRuleByPanel` | Lines no rule recognised | Add a rule in `detector.yml` |
-| `linesGroupedByDashboard` | Lines without an `api`, `service`, ... tag | Add their tag to `group-by` |
+| `linesGroupedByDashboard` | With `incident-scope: service`: lines without an `api`, `service`, ... tag | Add their tag to `group-by`, or use `incident-scope: graph` |
 
 ### Several regions at once
 
@@ -217,6 +219,10 @@ regions there. Since 21 Nov 2026: everything is kept 24 hours — in `store.yml`
 `scripts/system.sh start` now lists every setting of this kind where your `config-repo` differs from the template
 (`scripts/check-config.sh`, run it any time). It only reads: edit the file it names, then commit in `config-repo`.
 A setting that is missing is not listed, because the service's default is the template's value.
+
+Since 22 Nov 2026: anomalies are one per graph by default (`incident-scope: graph`; nothing to edit, add
+`incident-scope: service` to `detector.yml` for the older grouping). `upstreams.yml` is new and optional: the Settings
+tab creates it on the first save.
 
 ## Storage stays small
 

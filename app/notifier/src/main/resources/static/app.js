@@ -1232,7 +1232,10 @@ async function drawSidePanel(lineId) {
   add("Region", siteName(p0.site) + " (" + p0.site + ")"); add("Unit · kind", (line.unit || "—") + " · " + (line.kind || "—"));
   add("Signal", s ? s.signal + (s.bau ? " (BAU)" : "") : "—"); add("Normal", s ? withUnit(s.normal_value, line.unit) + " (at its last anomaly)" : "—");
   add("Newest value", last ? withUnit(last[1], line.unit) + " · " + shortTime(last[0]) : "no value in this range");
-  ov.append(details, el("h3", "sp-sub", "Anomalies (last 24 hours)"));
+  ov.append(details);
+  const rel = relationsBox(line, p0.site);                                            // upstream-callers U3
+  if (rel) ov.append(rel);
+  ov.append(el("h3", "sp-sub", "Anomalies (last 24 hours)"));
   const list = el("div", "anom-list"); ov.append(list);
   sidePanelState = { list, lineId };
   await drawAnomalies(list, lineId);
@@ -1352,7 +1355,21 @@ function anomalyState(inc) {
 }
 
 /** "datadoghq.com|api=/v1/invoices" → "api /v1/invoices"; upstream tags read "upstream …"; a dashboard group "(no service tag)". */
+/** anomaly-per-graph P4: "site|graph=<view>|<panel>[|tag=value]" → {panel title, "tag=value" or ""}; null otherwise. */
+function graphParts(inc) {
+  const key = String(inc.group_key || ""), i = key.indexOf("|graph=");
+  if (i < 0) return null;
+  const parts = key.slice(i + 7).split("|"), s = inc.series && inc.series[0];
+  return { panel: (s && s.panel_title) || "Panel", split: parts.slice(2).join("|") };
+}
+/** The graph an anomaly belongs to: "Success Rates · api=/v1/devices"; for service-grouped anomalies, the service. */
+function graphName(inc) {
+  const g = graphParts(inc);
+  return g ? g.panel + (g.split ? " · " + g.split : "") : serviceName(inc);
+}
 function serviceName(inc) {
+  const gp = graphParts(inc);
+  if (gp) return gp.panel;                                          // per graph: the tree's level is the panel
   const key = String(inc.group_key || "");
   const g = key.includes("|") ? key.slice(key.indexOf("|") + 1) : key;
   const eq = g.indexOf("=");
@@ -1421,7 +1438,7 @@ function chosenStates() {
 
 function drawAnomaliesPage(main) {
   const head = el("div", "page-head");
-  head.append(el("h1", "page-title", "Anomalies"), el("span", "muted", "last 24 hours · region › dashboard › service"));
+  head.append(el("h1", "page-title", "Anomalies"), el("span", "muted", "last 24 hours · region › dashboard › panel (or service)"));
   main.append(head);
   const bar = el("div", "anom-filters");
   const states = chosenStates();
@@ -1437,7 +1454,7 @@ function drawAnomaliesPage(main) {
     });
     bar.append(b);
   }
-  const search = el("input", "list-search anom-search"); search.type = "search"; search.placeholder = "Search service, dashboard or line";
+  const search = el("input", "list-search anom-search"); search.type = "search"; search.placeholder = "Search panel, service, dashboard or line";
   search.value = store.get("anom-search") || "";
   search.addEventListener("input", () => { store.set("anom-search", search.value); draw(); });
   bar.append(search);
@@ -1496,6 +1513,12 @@ function anomalyRow(inc, state, dashboard, regionLabel) {
     el("span", "muted", shortTime(start) + " · " + (end ? "lasted " + duration(end - start) : "for " + duration(Date.now() - start))));
   row.append(head);
   if (inc.reason && state !== "open" && state !== "waiting") row.append(el("div", "anom-reason muted", "Reason: " + inc.reason));
+  for (const s of inc.series || []) {                                                 // upstream-callers: Called by / Calls, once
+    const info = lineInfo.get(s.series_id), rel = info && relationsOf(info.line, info.places[0]?.site);
+    if (!rel || !rel.configured) continue;
+    row.append(el("div", "anom-rel", rel.title + ": " + (rel.list.map((x) => x.name + " (" + STATE_SHORT[x.state] + ")").join(", ") || "none")));
+    break;
+  }
   const lines = el("div", "anom-lines");
   const widgetOf = (s) => { const i = lineInfo.get(s.series_id); const p = i && i.places.find((x) => x.dashboard.id === dashboard.id); return p ? p.panel.title : ""; };
   const sorted = [...(inc.series || [])].sort((a, b) => widgetOf(a).localeCompare(widgetOf(b)) || tagsText(a.group_tags).localeCompare(tagsText(b.group_tags)));
@@ -1557,12 +1580,12 @@ function drawWorst(box, dash) {
   if (!list.length) { box.append(el("div", "worst-none", "No anomalies in the " + (RANGE_LABEL[range] || range).toLowerCase() + ", and none waiting for a reason")); return; }
   const rows = el("div", "worst-rows");
   const hr = el("div", "worst-row worst-hr");
-  for (const t of ["#", "Service", "Line", "Signal", "Size", "Lasted", "State"]) hr.append(el("span", null, t));
+  for (const t of ["#", "Graph", "Line", "Signal", "Size", "Lasted", "State"]) hr.append(el("span", null, t));
   rows.append(hr);
   list.slice(0, all ? list.length : 5).forEach((x, i) => {
     const r = el("button", "worst-row"); r.type = "button"; r.title = x.inc.title || "";
     const sig = [x.s.signal, x.s.direction ?? x.s.reason].filter(Boolean).join(" ");
-    r.append(el("span", "num", String(i + 1)), el("span", "ellip", serviceName(x.inc)), el("span", "ellip", seriesName(x.s)),
+    r.append(el("span", "num", String(i + 1)), el("span", "ellip", graphName(x.inc)), el("span", "ellip", seriesName(x.s)),
       el("span", "ellip", sig), el("span", "num", change(x.s)), el("span", "num", duration(x.minutes * 60000)), el("span", "pill-s st-" + x.state, STATE_WORD[x.state]));
     r.addEventListener("click", () => focusLine(x.s.series_id));
     rows.append(r);
@@ -1582,6 +1605,77 @@ function focusLine(id) {
   openLine(id);
 }
 
+// ---- upstream-callers U3: which APIs call an upstream (your upstreams.yml), shown on anomalies ------------------------
+let upstreams = { caller_tag: "api", upstream_tags: ["upstream_service", "peer.rpc.service"], regions: {} };
+async function loadUpstreams() { try { upstreams = await getJson("/settings/upstreams"); } catch (e) { /* none known */ } }
+window.addEventListener("upstreams-changed", async () => {
+  await loadUpstreams();
+  if (current?.line && $("sidePanel")) { const sp = $("sidePanel"); unwatchAll(sp); sp.remove(); drawOverlays(); }
+  const m = $("incidentsView"); if (m._redrawAnomalies && current?.page === "anomalies") m._redrawAnomalies();
+});
+const regionOfSite = (site) => (regions.find((r) => r.site === site) || {}).name || "";
+/** The lines of a region whose tag has this value. O(lines). */
+function linesWhere(site, tag, value) {
+  const out = [];
+  for (const [id, info] of lineInfo) if (info.line.tags && info.line.tags[tag] === value && info.places.some((p) => p.site === site)) out.push(id);
+  return out;
+}
+/** Worst state of some lines now ("open", "waiting" or "fine"), the change of their biggest anomaly, and the line to open. */
+function stateOfLines(ids) {
+  let state = "fine", text = "", line = ids[0] || null, best = -1;
+  for (const id of ids) {
+    const st = lineState(id);
+    const rank = st === "open" ? 2 : st === "waiting" ? 1 : 0;
+    for (const iid of incidentsOfLine.get(id) || []) {
+      const inc = incidents.get(iid); if (!inc) continue;
+      const as = anomalyState(inc); if (as !== "open" && as !== "waiting") continue;
+      const x = (inc.series || []).find((y) => y.series_id === id); if (!x) continue;
+      const score = rank * 1e6 + sizeOf(x);
+      if (score > best) { best = score; line = id; text = [x.signal, x.direction ?? x.reason].filter(Boolean).join(" ") + " " + change(x); }
+    }
+    if (rank === 2) state = "open"; else if (rank === 1 && state !== "open") state = "waiting";
+  }
+  return { state, text, line, count: ids.length };
+}
+/** For a line: "Called by" (it is an upstream) or "Calls" (it is an API), from upstreams.yml for its region; null if neither. */
+function relationsOf(line, site) {
+  const map = (upstreams.regions || {})[regionOfSite(site)] || {};
+  const tags = line.tags || {};
+  const upTag = (upstreams.upstream_tags || []).find((t) => tags[t] && tags[t] !== "N/A");
+  if (upTag) {
+    const up = tags[upTag], apis = map[up];
+    return { title: "Called by", name: up, configured: Array.isArray(apis),
+      list: (apis || []).map((api) => Object.assign({ name: api }, stateOfLines(linesWhere(site, upstreams.caller_tag || "api", api)))) };
+  }
+  const api = tags[upstreams.caller_tag || "api"];
+  if (!api) return null;
+  const ups = Object.entries(map).filter(([, apis]) => (apis || []).includes(api)).map(([u]) => u);
+  if (!ups.length) return null;
+  return { title: "Calls", name: api, configured: true,
+    list: ups.map((u) => Object.assign({ name: u }, stateOfLines((upstreams.upstream_tags || []).flatMap((t) => linesWhere(site, t, u))))) };
+}
+const STATE_SHORT = { open: "open", waiting: "needs a reason", fine: "fine" };
+function relationsBox(line, site) {
+  const rel = relationsOf(line, site);
+  if (!rel) return null;
+  const box = el("div", "rel-box");
+  box.append(el("h3", "sp-sub", rel.title + " (" + rel.name + ")"));
+  if (!rel.configured) {
+    const a = el("a", null, "Callers not configured: add them in Settings › Upstreams"); a.href = "#settings";
+    box.append(a); return box;
+  }
+  const list = el("div", "rel");
+  for (const x of rel.list) {
+    const row = el(x.line ? "a" : "div", "rel-row");
+    const place = x.line && lineInfo.get(x.line)?.places[0];
+    if (place) row.href = "#/dashboard/" + encodeURIComponent(place.dashboard.id) + "?line=" + x.line;
+    row.append(el("span", "rel-name", x.name), el("span", "rel-text", x.count ? x.text : "no lines collected"), el("span", "pill-s st-" + x.state, STATE_SHORT[x.state]));
+    list.append(row);
+  }
+  box.append(list);
+  return box;
+}
+
 // ---- start -------------------------------------------------------------------------------------------------------
 (async function start() {
   applyZoom();
@@ -1589,6 +1683,7 @@ function focusLine(id) {
   route();
   connect();
   pollCatchUp();
+  loadUpstreams();
   setInterval(async () => { await loadCatalogue(); if (current?.page === "list") route(); }, 60000);
 })();
 

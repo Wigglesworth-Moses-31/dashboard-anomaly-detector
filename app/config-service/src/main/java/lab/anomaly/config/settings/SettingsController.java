@@ -94,6 +94,48 @@ public class SettingsController {
         return ResponseEntity.ok(out);
     }
 
+    /** upstream-callers U2: the file as committed (or the template's start), parsed, with the Detector's upstream tags. */
+    @GetMapping("/settings/upstreams")
+    public ResponseEntity<Map<String, Object>> upstreams() throws Exception {
+        if (repo == null) {
+            return ResponseEntity.status(503).body(Map.of("problem", "the settings repository is not a local folder"));
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("commit", repo.head());
+        String text = repo.committed("upstreams.yml");
+        out.put("text", text == null ? UPSTREAMS_START : text);
+        try {
+            UpstreamsYaml.Parsed p = UpstreamsYaml.parse(text);
+            out.put("caller_tag", p.callerTag());
+            out.put("regions", p.regions());
+        } catch (IllegalArgumentException e) {
+            out.put("caller_tag", "api");
+            out.put("regions", Map.of());
+            out.put("problem", "upstreams.yml: " + e.getMessage());           // edited by hand: shown, fixed in the editor
+        }
+        out.put("upstream_tags", UpstreamsYaml.upstreamTags(repo.committed("detector.yml")));
+        return ResponseEntity.ok(out);
+    }
+
+    /** upstream-callers U2: {"text"}: checked, then one commit on top of the commit the page showed. */
+    @PostMapping("/settings/upstreams")
+    public ResponseEntity<Map<String, Object>> saveUpstreams(@RequestHeader(value = "If-Match", required = false) String seen,
+                                                             @RequestBody Map<String, Object> body) {
+        return write(seen, () -> {
+            String text = body == null || body.get("text") == null ? "" : String.valueOf(body.get("text"));
+            UpstreamsYaml.parse(text);                                         // a wrong shape is refused, nothing written
+            String file = text.endsWith("\n") ? text : text + "\n";
+            return r -> List.of(new SettingsRepo.Change(SettingsRepo.files("upstreams.yml", file), "settings page: upstreams"));
+        });
+    }
+
+    static final String UPSTREAMS_START = """
+            # Which APIs call which upstream service, per region (upstream-callers). Saved from the Settings tab.
+            caller-tag: api                 # the tag whose value names an API
+            regions:
+              us: {}
+            """;
+
     @PostMapping("/settings/regions")
     public ResponseEntity<Map<String, Object>> addRegion(@RequestHeader(value = "If-Match", required = false) String seen,
                                                          @RequestBody Map<String, Object> body) {

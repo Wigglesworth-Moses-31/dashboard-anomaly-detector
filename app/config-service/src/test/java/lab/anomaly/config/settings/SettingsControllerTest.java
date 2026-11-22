@@ -199,4 +199,35 @@ class SettingsControllerTest {
         assertThat(SettingsController.slug("../../etc/passwd")).isEqualTo("etc-passwd.json");
         assertThat(SettingsController.slug("   ")).isEqualTo("dashboard.json");
     }
+
+    // ---- upstream-callers 1.2 ----------------------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void upstreamsAreSavedAsOneCommitAndReadBack() throws Exception {
+        var empty = c.upstreams().getBody();
+        assertThat(empty.get("regions")).as("no file yet").isEqualTo(Map.of());
+        assertThat((List<String>) empty.get("upstream_tags")).contains("upstream_service");
+        String text = "caller-tag: api\nregions:\n  us:\n    billing-core: [/v1/invoices, /v1/payments]\n";
+        var r = c.saveUpstreams(head(), Map.of("text", text));
+        assertThat(r.getStatusCode().value()).isEqualTo(200);
+        assertThat(log().get(0).getFullMessage()).isEqualTo("settings page: upstreams");
+        assertThat(refreshes.get()).isEqualTo(1);
+        var back = c.upstreams().getBody();
+        assertThat(back.get("text")).isEqualTo(text);
+        assertThat(back.get("regions")).isEqualTo(Map.of("us", Map.of("billing-core", List.of("/v1/invoices", "/v1/payments"))));
+    }
+
+    @Test
+    void aWrongShapeIsRefusedAndNothingWritten() throws Exception {
+        int before = log().size();
+        var asia = c.saveUpstreams(head(), Map.of("text", "regions:\n  asia:\n    x: [/a]\n"));
+        assertThat(asia.getStatusCode().value()).isEqualTo(400);
+        assertThat(String.valueOf(asia.getBody().get("problem"))).contains("regions must be us or eu");
+        var notList = c.saveUpstreams(head(), Map.of("text", "regions:\n  us:\n    billing-core: /v1/invoices\n"));
+        assertThat(String.valueOf(notList.getBody().get("problem"))).contains("must be a list of APIs");
+        var stale = c.saveUpstreams("0000000", Map.of("text", "regions:\n  us: {}\n"));
+        assertThat(stale.getStatusCode().value()).isEqualTo(409);
+        assertThat(log()).hasSize(before);
+    }
 }

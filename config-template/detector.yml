@@ -22,6 +22,8 @@ anomaly:
     silence-min-presence: 0.9               # only lines with a value in 9 of 10 steps can go silent
     silence-skip-signals: [errors, error-rate]   # an error line that stops reporting is good news
     group-by: [api, upstream_service, peer.rpc.service, service, resource_name]   # first tag a line has; else its dashboard
+    incident-scope: graph                   # anomaly-per-graph: one anomaly per region, dashboard, panel and small graph;
+                                            #   service = by the first group-by tag a line has, else its dashboard
     upstream-tags: [upstream_service, peer.rpc.service]
     incident-retention: 1d                  # closed incidents kept, with their reasons (at most 10d); waiting ones until closed
     store-address: localhost:9102           # the Store's gRPC (history for a warm start)

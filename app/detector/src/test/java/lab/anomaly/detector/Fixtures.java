@@ -54,6 +54,11 @@ public final class Fixtures {
         return holder(Map.of()).get();
     }
 
+    /** The shipped settings with the older grouping by service tag (incident-scope: service). */
+    public static DetectorSettings serviceScope() {
+        return holder(Map.of("anomaly.detector.incident-scope", "service")).get();
+    }
+
     public static List<SeriesDescriptor> recordedLines() {
         try (InputStream in = Fixtures.class.getResourceAsStream("/lines-226.jsonl")) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8).lines().filter(l -> !l.isBlank())

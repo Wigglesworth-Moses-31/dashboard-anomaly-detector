@@ -54,7 +54,15 @@ public final class IncidentBook {
         this.bau = isBau;
     }
 
+    private boolean perGraph = true;                                       // anomaly-per-graph P3
+
     public void configure(List<String> groupByTags, Collection<String> upstream, long calmPeriodMs) {
+        configure(groupByTags, upstream, calmPeriodMs, lab.anomaly.detector.DetectorSettings.SCOPE_GRAPH);
+    }
+
+    /** {@code scope}: "graph" = one incident per region, dashboard, panel and small graph; "service" = by group-by tags. */
+    public void configure(List<String> groupByTags, Collection<String> upstream, long calmPeriodMs, String scope) {
+        this.perGraph = !lab.anomaly.detector.DetectorSettings.SCOPE_SERVICE.equals(scope);
         this.calmMs = calmPeriodMs;
         this.groupBy = List.copyOf(groupByTags);
         this.upstreamTags = Set.copyOf(upstream);
@@ -75,6 +83,9 @@ public final class IncidentBook {
     public Group groupOf(LineFacts line) {
         String site = line.site() == null ? "" : line.site();
         sitesSeen.add(site);                                                 // O(1); a handful of sites at most
+        if (perGraph) {
+            return graphOf(line, site);
+        }
         for (String tag : groupBy) {
             String value = line.tags().get(tag);
             if (value != null && !value.isBlank() && !value.equalsIgnoreCase("N/A")) {
@@ -84,6 +95,24 @@ public final class IncidentBook {
         View v = line.primaryView();
         String title = v.getViewTitle().isBlank() ? v.getViewId() : v.getViewTitle();
         return new Group(site + "|dashboard=" + v.getViewId(), title, false, true, site);
+    }
+
+    /**
+     * anomaly-per-graph P3: the line's graph at its first place: "site|graph=<view>|<widget id or panel title>" and, for
+     * a small graph of a split group, "|<tag>=<value>". Labelled "Success Rates · api=/v1/devices". O(1).
+     */
+    private Group graphOf(LineFacts line, String site) {
+        View v = line.primaryView();
+        String panel = v.getWidgetId() != 0 ? "w" + v.getWidgetId() : "t:" + v.getPanelPath() + "/" + v.getPanelTitle();
+        String label = v.getPanelTitle().isBlank() ? (v.getViewTitle().isBlank() ? v.getViewId() : v.getViewTitle()) : v.getPanelTitle();
+        String key = site + "|graph=" + v.getViewId() + "|" + panel;
+        String splitTag = v.getSplitTag();
+        if (!splitTag.isBlank()) {
+            String value = line.tags().getOrDefault(splitTag, "");
+            key += "|" + splitTag + "=" + value;
+            label += " · " + splitTag + "=" + value;
+        }
+        return new Group(key, label, false, false, site);
     }
 
     /** Remembers a watched line's site. O(1). */

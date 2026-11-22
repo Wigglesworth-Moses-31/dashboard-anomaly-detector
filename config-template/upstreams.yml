@@ -1,0 +1,8 @@
+# Which APIs call which upstream service, per region (upstream-callers). Edit it in the Settings tab (Upstreams), or here
+# and commit. An upstream anomaly then shows "Called by" with these APIs, and an API anomaly shows "Calls".
+caller-tag: api                 # the tag whose value names an API (the upstream's tags are upstream-tags in detector.yml)
+regions:
+  us: {}
+  # us:
+  #   billing-core: [/v1/invoices, /v1/payments]
+  #   telemetry-ingest: [/v1/telemetry]

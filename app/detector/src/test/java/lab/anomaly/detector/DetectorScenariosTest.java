@@ -32,7 +32,7 @@ class DetectorScenariosTest {
     @BeforeEach
     void setUp() {
         detector = new Detector(() -> "inc-" + ids.incrementAndGet());
-        detector.configure(Fixtures.defaults(), 1);
+        detector.configure(Fixtures.serviceScope(), 1);   // these scenarios test grouping by service tag
     }
 
     // ---- helpers ----------------------------------------------------------------------------------------------
@@ -110,7 +110,8 @@ class DetectorScenariosTest {
 
     @Test
     void aStricterLatencyRuleNeedsThreeSteps() {
-        DetectorSettings strict = Fixtures.holderEdited(t -> t.replace("min-change: 50\n        steps: 2", "min-change: 50\n        steps: 3")).get();
+        DetectorSettings strict = Fixtures.holderEdited(t -> t.replace("min-change: 50\n        steps: 2", "min-change: 50\n        steps: 3")
+                .replace("incident-scope: graph", "incident-scope: service")).get();
         detector.configure(strict, 2);
         SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));
         long t = normal(inv, T0, WARM, 138);
@@ -461,7 +462,8 @@ class DetectorScenariosTest {
                 .satisfies(c -> assertThat(c.incident().getTitle()).isEqualTo("Payments platform: latency up"));
         assertThat(detector.view().groupedByDashboard()).isEqualTo(2);
 
-        detector.configure(Fixtures.holderEdited(text -> text.replace("group-by: [api,", "group-by: [endpoint, api,")).get(), 2);
+        detector.configure(Fixtures.holderEdited(text -> text.replace("group-by: [api,", "group-by: [endpoint, api,")
+                .replace("incident-scope: graph", "incident-scope: service")).get(), 2);
         t = normal(a, t, 14, 100);                                 // calm: the first incident closes
         normal(b, t - 14 * STEP, 14, 100);
         assertThat(calmed()).hasSize(1);
@@ -486,7 +488,7 @@ class DetectorScenariosTest {
         Change opened = of(EventType.EVENT_TYPE_OPENED).get(0);
 
         Detector restarted = new Detector(() -> "inc-new");
-        restarted.configure(Fixtures.defaults(), 1);
+        restarted.configure(Fixtures.serviceScope(), 1);
         restarted.restore(opened.incident(), opened.sequence());
         restarted.describe(inv);
         long[] times = new long[WARM];
@@ -673,7 +675,7 @@ class DetectorScenariosTest {
         long t = calmIncident(inv);
         Change calm = calmed().get(0);
         Detector restarted = new Detector(() -> "inc-new");
-        restarted.configure(Fixtures.defaults(), 1);
+        restarted.configure(Fixtures.serviceScope(), 1);
         restarted.restore(calm.incident(), calm.sequence());
         restarted.describe(inv);
         double[] values = new double[WARM];
@@ -877,7 +879,7 @@ class DetectorScenariosTest {
         calmIncident(inv);
         Change calm = calmed().get(0);
         Detector restarted = new Detector(() -> "inc-new");
-        restarted.configure(Fixtures.defaults(), 1);
+        restarted.configure(Fixtures.serviceScope(), 1);
         restarted.restore(calm.incident(), calm.sequence());
         assertThat(restarted.reannounce(System.currentTimeMillis(), 12 * 3_600_000L)).singleElement()
                 .satisfies(c -> assertThat(c.incident().getIncidentId()).isEqualTo(calm.incident().getIncidentId()));

@@ -72,6 +72,18 @@ class TranslateAndClassifyTest {
         assertThat(line.description().getQueryText()).startsWith("query1 / query2 * 100  where  query1 = ");
     }
 
+    /** anomaly-per-graph P2: a split group's lines carry its split tag (and widget id) in their place. */
+    @Test
+    void aSplitGroupLineNamesItsSplitTag() {
+        PollUnit unit = new PollUnit("key:split", List.of(new Query("query1", "sum:lab.api.request.count{env:prod} by {api}.as_count().rollup(sum, 10)")),
+                List.of("query1"), List.of(new PollUnit.View("w2f-pqs-ghd", "Lab", "Count", "API Metrics", "", 2, 5, 77L, "api")));
+        TranslatedLine line = translator.translate(unit, answer(T0 + 25_000, 5.0), STEP).get(0);
+        assertThat(line.description().getViews(0).getSplitTag()).isEqualTo("api");
+        assertThat(line.description().getViews(0).getWidgetId()).isEqualTo(77L);
+        assertThat(translator.translate(unit(List.of(new Query("query1", "sum:x{*}")), List.of("query1"), "Count"), answer(T0 + 25_000, 5.0), STEP)
+                .get(0).description().getViews(0).getSplitTag()).as("not a split group").isEmpty();
+    }
+
     // ---- 4.2 classification ------------------------------------------------------------------------
 
     private static final List<ClassificationRule> RULES = List.of(

@@ -189,3 +189,12 @@ a.dl-row:hover { background: var(--hover); } .dl-title { font-weight: 550; color
 .side-panel { width: min(380px, 100vw); box-shadow: none; }
 body.panel-open .dd-main, body.panel-open .topbar { margin-right: 380px; }
 @media (max-width: 900px) { body.panel-open .dd-main, body.panel-open .topbar { margin-right: 0; } }
+/* upstream-callers: the Upstreams editor, and Called by / Calls in the details panel */
+.s-editor.s-editor-small { height: 30vh; min-height: 180px; }
+.s-editor-small .s-code { padding-left: 12px; }
+.rel { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.rel-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--text); text-decoration: none; }
+a.rel-row:hover { background: var(--hover); }
+.rel-name { flex: 1; font-weight: 550; overflow-wrap: anywhere; } .rel-text { color: var(--muted); font-size: 12px; }
+.pill-s.st-fine { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+.anom-rel { font-size: 12px; color: var(--muted); padding: 2px 0 0 2px; }

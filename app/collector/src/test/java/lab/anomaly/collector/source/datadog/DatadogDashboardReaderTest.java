@@ -63,4 +63,14 @@ class DatadogDashboardReaderTest {
         assertThat(successRate.formulas()).containsExactly("query1 / query2 * 100");
         assertThat(successRate.queries()).extracting(q -> q.name()).containsExactly("query1", "query2");
     }
+
+    /** anomaly-per-graph P2: a split group's panels name their split tag; other panels none. */
+    @Test
+    void splitGroupPanelsNameTheirSplitTag() throws Exception {
+        List<Panel> panels = read("lab-skeleton-dashboard.json").panels();
+        assertThat(panels).filteredOn(p -> p.title().equals("Success Rates")).extracting(Panel::splitTag)
+                .containsExactlyInAnyOrder("api", "upstream_service");
+        assertThat(panels).filteredOn(p -> p.title().equals("Latencies")).extracting(Panel::splitTag).contains("api", "upstream_service");
+        assertThat(panels).as("panels outside split groups").anyMatch(p -> p.splitTag().isEmpty());
+    }
 }

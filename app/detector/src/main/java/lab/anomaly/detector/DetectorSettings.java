@@ -23,12 +23,14 @@ import lab.anomaly.kit.settings.SettingsValidator;
  * @param storeAddress       host:port of the Store's gRPC service (warm start)
  * @param rules              ordered; the first that matches a line watches it
  * @param general            the rule for lines no rule matches
+ * @param incidentScope      "graph" (default, anomaly-per-graph): one incident per region, dashboard, panel and small
+ *                           graph; "service": by the first {@code groupBy} tag a line has, else its dashboard
  */
 public record DetectorSettings(Duration history, Duration minHistory, Duration calmPeriod, Duration silenceAfter,
                                double silenceMinPresence, List<String> silenceSkipSignals, List<String> groupBy,
                                List<String> upstreamTags,
                                Duration incidentRetention, String storeAddress, List<RuleSettings> rules,
-                               GeneralSettings general, List<BauSettings> bau) {
+                               GeneralSettings general, List<BauSettings> bau, String incidentScope) {
 
     /**
      * Anomalies that are business as usual (add-line-reasons L2): a line whose signal (and, if given, direction: up,
@@ -64,7 +66,11 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
         upstreamTags = upstreamTags == null ? List.of() : List.copyOf(upstreamTags);
         rules = rules == null ? List.of() : List.copyOf(rules);
         bau = bau == null ? DEFAULT_BAU : List.copyOf(bau);
+        incidentScope = incidentScope == null || incidentScope.isBlank() ? SCOPE_GRAPH : incidentScope.strip().toLowerCase(java.util.Locale.ROOT);
     }
+
+    public static final String SCOPE_GRAPH = "graph";
+    public static final String SCOPE_SERVICE = "service";
 
     /**
      * One rule. Exactly one of {@code factor} (times normal) or {@code points} (percentage points) is set.
@@ -105,6 +111,8 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
                 SettingsValidator.require("bau", s -> s.bau().stream().allMatch(b -> b.signal() != null && !b.signal().isBlank()
                         && (b.direction() == null || b.direction().isBlank() || BAU_DIRECTIONS.contains(b.direction().toLowerCase(java.util.Locale.ROOT)))),
                         "each entry needs a signal, and a direction of up, down or silent when given"),
+                SettingsValidator.require("incident-scope", s -> SCOPE_GRAPH.equals(s.incidentScope()) || SCOPE_SERVICE.equals(s.incidentScope()),
+                        "must be graph or service"),
                 SettingsValidator.positive("history", DetectorSettings::history),
                 SettingsValidator.require("history", s -> s.history() == null || s.history().compareTo(MAX_HISTORY) <= 0,
                         "at most 2 days: the Store keeps no more (lab limit)"),

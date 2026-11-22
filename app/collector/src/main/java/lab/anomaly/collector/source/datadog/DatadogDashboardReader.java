@@ -68,7 +68,10 @@ public final class DatadogDashboardReader {
                 Panel panel = panelOf(request, title, visit.path());
                 if (panel != null) {
                     long widgetId = visit.widget().path("id").asLong(0);   // add-datadog-look K1: exact placement
-                    panels.add(widgetId == 0 ? panel : new Panel(panel.title(), panel.path(), panel.queries(), panel.formulas(), widgetId));
+                    String splitTag = "split_group".equals(type)            // anomaly-per-graph P2: one graph per value of this tag
+                            ? text(definition.path("split_config").path("split_dimensions").path(0).path("one_graph_per")) : "";
+                    panels.add(widgetId == 0 && splitTag.isEmpty() ? panel
+                            : new Panel(panel.title(), panel.path(), panel.queries(), panel.formulas(), widgetId, splitTag));
                     found = true;
                 }
             }

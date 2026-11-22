@@ -41,6 +41,7 @@ async function load() {
   if (!s.ok) { $("sRegions").textContent = "Settings unavailable: " + s.problem; return; }
   state = s.data; keys = k.ok ? k.data : []; health = h.ok ? h.data : {};
   render();
+  drawUpstreams();
   const running = (health.components && health.components.collector && health.components.collector.details
     && Object.keys(health.components.collector.details.backfill || {}).length) || 0;
   if (running && location.hash === "#settings") setTimeout(() => { if (location.hash === "#settings") load(); }, 5000);   // progress moves
@@ -414,4 +415,39 @@ async function openEditor(r, d, box) {
   code.setSelectionRange(0, 0);
   code.focus({ preventScroll: true });
   code.scrollTop = 0; gutter.scrollTop = 0;
+}
+
+// ---- upstream-callers 1.3: upstreams.yml in an editor, checked and saved as one commit ----------------------------
+let upstreamsDirty = false, upstreamsNote = "";
+async function drawUpstreams() {
+  const box = $("sUpstreams");
+  if (!box || upstreamsDirty) return;                    // never throw away unsaved edits on a reload
+  const u = await call("GET", "/settings/upstreams");
+  box.textContent = "";
+  if (!u.ok) { box.append(el("div", "s-state bad", "Upstreams unavailable: " + u.problem)); return; }
+  const wrap = el("div", "s-editor s-editor-small");
+  const code = el("textarea", "s-code");
+  code.spellcheck = false; code.wrap = "off"; code.value = u.data.text || ""; code.setAttribute("aria-label", "upstreams.yml");
+  wrap.append(code);
+  const status = el("div", "s-state");
+  const tags = el("div", "muted", "Upstream tags (from detector.yml): " + (u.data.upstream_tags || []).join(", ") + " · API tag: " + (u.data.caller_tag || "api"));
+  const save = button("Save", "primary", async () => {
+    save.disabled = true;
+    feedback(status, "saving…");
+    const r = await call("POST", "/settings/upstreams", { text: code.value }, u.data.commit);
+    if (!r.ok) { feedback(status, r.status === 409 ? "Changed meanwhile: " + r.problem + " (reload to see it)" : r.problem, true); save.disabled = false; return; }
+    upstreamsDirty = false;
+    upstreamsNote = "Saved as commit " + short(r.data.commit);           // shown again after the redraw below
+    window.dispatchEvent(new CustomEvent("upstreams-changed"));
+    drawUpstreams();
+  });
+  save.disabled = true;
+  code.addEventListener("input", () => { upstreamsDirty = code.value !== u.data.text; save.disabled = !upstreamsDirty; feedback(status, upstreamsDirty ? "changed, not saved" : ""); });
+  code.addEventListener("keydown", (e) => {
+    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); code.setRangeText("  ", code.selectionStart, code.selectionEnd, "end"); code.dispatchEvent(new Event("input")); }
+  });
+  if (u.data.problem) feedback(status, u.data.problem, true);
+  else if (upstreamsNote) { feedback(status, upstreamsNote); upstreamsNote = ""; }
+  const bar = el("div", "s-actions"); bar.append(save, status);
+  box.append(tags, wrap, bar);
 }
