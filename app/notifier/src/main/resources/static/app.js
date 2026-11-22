@@ -373,8 +373,10 @@ function axisColors() { return dark() ? { axis: "#8d95a6", grid: "#2a2f3a" } : {
 /** A timeseries widget (lines, bars or areas), or a full-screen / side-panel graph. */
 function timeseriesOption(spec) {
   const now = Date.now(), from = now - rangeMs(range);
-  const all = spec.kind === "small" ? topLines(spec.lines, catalogue.lines_per_panel || 20) : spec.lines;
-  const legendShown = spec.kind === "small" && spec.showLegend !== false && all.length > 1 && all.length <= 10;
+  const all = spec.kind === "small" ? topLines(spec.lines, catalogue.lines_per_panel || 20) : [...spec.lines];
+  // a picked or opened line is always drawn, even when it is not among the busiest lines (redesign-dashboard 2.9)
+  for (const x of [spec.focus, ...(spec.only || [])]) if (x && spec.lines.includes(x) && !all.includes(x)) all.push(x);
+  const legendShown = spec.kind === "small" && spec.showLegend !== false && all.length > 1;   // scrolls when long
   // redesign-dashboard R6: with a legend, unselected lines stay listed; without one, only the chosen lines are drawn
   const lines = spec.only && !legendShown ? all.filter((l) => spec.only.has(l)) : all;
   const unit = lineInfo.get(lines[0] || all[0])?.line.unit;
@@ -403,6 +405,13 @@ function timeseriesOption(spec) {
     };
   });
   const c = axisColors(), f = fpx(11);
+  // 2.9: the axis fits the opened line, so a small line among big ones is readable (the others are faded and clipped)
+  let fitMin, fitMax;
+  if (focus && lines.length > 1) {
+    let lo = Infinity, hi = -Infinity;
+    for (const [t, v] of series.get(focus) || []) if (t >= from && v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    if (isFinite(lo)) { const pad = (hi - lo) * 0.15 || Math.abs(hi) * 0.1 || 1; fitMin = lo - pad; fitMax = hi + pad; if (lo >= 0 && fitMin < 0) fitMin = 0; }
+  }
   const legend = !legendShown ? undefined
     : { show: true, bottom: 0, type: "scroll", textStyle: { color: c.axis, fontSize: f }, itemHeight: 6, itemWidth: 12, pageIconSize: 9,
       selected: Object.fromEntries(s.map((x) => [x.name, !spec.only || spec.only.has(x.id)])) };
@@ -412,8 +421,9 @@ function timeseriesOption(spec) {
     tooltip: { trigger: "axis", confine: true, order: "valueDesc", valueFormatter: (v) => withUnit(v, unit), textStyle: { fontSize: fpx(12) }, axisPointer: { type: "line", lineStyle: { color: c.axis } } },
     legend,
     xAxis: { type: "time", min: from, max: now, splitNumber: 4, axisLabel: { color: c.axis, hideOverlap: true, fontSize: f }, axisLine: { lineStyle: { color: c.grid } }, splitLine: { show: false } },
-    yAxis: { type: "value", scale: spec.yScale !== "zero", min: spec.yMin, max: spec.yMax, splitNumber: 3,
-      axisLabel: { color: c.axis, fontSize: f, hideOverlap: true, formatter: (v) => axisNum(v, unit) }, splitLine: { lineStyle: { color: c.grid } } },
+    yAxis: { type: "value", scale: spec.yScale !== "zero", min: fitMin ?? spec.yMin, max: fitMax ?? spec.yMax, splitNumber: 3,
+      axisLabel: { color: c.axis, fontSize: f, hideOverlap: true, formatter: (v) => axisNum(v, unit), showMinLabel: fitMin == null ? null : false, showMaxLabel: fitMax == null ? null : false },
+      splitLine: { lineStyle: { color: c.grid } } },
     series: s,
   };
 }
@@ -1197,7 +1207,11 @@ function drawFullScreen(key) {
       const shown = !bigChart || !bigChart._spec || !bigChart._spec.only || bigChart._spec.only.has(l.id);
       const tr = el("tr", shown ? null : "dim"), a = el("a", null, lineName(l)); a.href = "javascript:void 0";
       a.title = "Show only this line (Ctrl/Cmd-click: add or remove it)";
-      a.addEventListener("click", (e) => { if (bigChart && charts.has(bigChart)) pickLine(bigChart, l.id, e.metaKey || e.ctrlKey); else openLine(l.id); });   // R6
+      a.addEventListener("click", (e) => {                                                    // R6, 2.9
+        if (!bigChart) { openLine(l.id); return; }
+        if (charts.has(bigChart)) pickLine(bigChart, l.id, e.metaKey || e.ctrlKey);
+        else { bigChart._spec.only = new Set([l.id]); draw(); }                           // applied when the chart is drawn
+      });
       const more = el("button", "w-menu row-open", "↗"); more.type = "button"; more.title = "Open this line's details";
       more.addEventListener("click", () => openLine(l.id));
       const st = lineState(l.id); const td = el("td"); td.append(a, more); if (st === "open" || st === "waiting") td.append(el("span", "state " + st, st === "open" ? " ● open" : " ● needs a reason"));

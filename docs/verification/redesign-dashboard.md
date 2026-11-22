@@ -49,3 +49,10 @@ check (fix-backfill-faults task 3.4), together with the user's own panel.
 | Close the panel | No graph keeps a highlight; the page takes its full width again |
 | Peak dot | Drawn at the highest (or, for a drop, lowest) value inside each band; not seen live because the lab traffic is off and the line has no values in the range |
 | Script errors | None; Notifier tests 31/31 |
+
+## Busy graphs (22 Nov)
+| Check (synthetic dashboard, 30 lines per widget) | Result |
+|---|---|
+| Before | The widget drew its busiest 20 lines and had no legend; opening a line outside those 20 showed its details but nothing in the graph |
+| Legend | Shown, scrolling in pages (1/3); picking its last entry shows only that line |
+| Opening a line outside the busiest 20 | Drawn bold (3 px), the other 20 faded, the axis fitted to it; no script errors |

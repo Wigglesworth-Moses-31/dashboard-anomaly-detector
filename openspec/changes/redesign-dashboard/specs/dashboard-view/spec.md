@@ -126,3 +126,12 @@ group. Enlarging a small graph SHALL show only that graph's lines, titled with i
 #### Scenario: One API's graph
 - **WHEN** the enlarge button of the `api: /v1/devices` graph inside "Success Rates" is clicked
 - **THEN** a full-screen view shows only `/v1/devices`'s success rate, titled "Success Rates · api: /v1/devices", with its lines table
+
+### Requirement: A picked line always shows in its graph
+A graph with many lines SHALL still offer a legend (scrolling when long), and a line that is picked or opened SHALL be
+drawn in its graph even when it is not among the busiest lines the graph draws. While a line is opened, the value
+axis SHALL fit that line so it is readable next to bigger lines.
+
+#### Scenario: The 27th line
+- **WHEN** a graph has 30 lines, draws its busiest 20, and the line at the bottom of its list is opened
+- **THEN** that line is drawn bold in the graph, the others faded, the axis fits it, and its details open beside the graph

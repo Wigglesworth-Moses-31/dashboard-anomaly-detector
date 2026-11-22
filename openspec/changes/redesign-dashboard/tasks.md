@@ -18,6 +18,8 @@
 - [x] 2.7 Opening a line highlights it on its graphs (bold, others faded, labelled band, peak dot); the panel has no graph and the page makes room
 - [x] 2.8 A visible enlarge button on every graph, including each small graph of a split group
 
+- [x] 2.9 Busy graphs: legend for any number of lines; a picked or opened line is always drawn; the axis fits it
+
 ## 3. Finish
 - [x] 3.1 Build, tests, restart; screenshots at 100%, 200% and 75%, light and dark; memory check
 - [x] 3.2 README and `docs/verification/redesign-dashboard.md`
