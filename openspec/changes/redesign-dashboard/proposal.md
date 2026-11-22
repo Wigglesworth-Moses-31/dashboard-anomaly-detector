@@ -65,6 +65,13 @@ Ctrl/Cmd-click adds or removes one line. Works in a widget, in full screen and i
 | What the Detector does | Values found in the catch-up are judged as the past, like a backfill ("found in backfill", no reason needed) |
 | Shown | The top bar says "Catching up 3 h 20 min · 40%" until done |
 
+### G. Feedback of 22 Nov 2026
+The user: "I don't want a separate anomaly graph on the right side, I need to sync it with the existing graph itself,
+and enlarge a specific metric is not available for every metrics panel". Opening a line now highlights it on the
+graphs already on screen (bold line, faded others, labelled band, dot at the peak); the right-hand panel keeps only
+details and the reason box, and the page makes room for it. Every graph, including each small graph of a split group,
+gets a visible enlarge button.
+
 ## Capabilities
 
 ### Modified Capabilities

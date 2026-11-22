@@ -14,6 +14,10 @@
 - [x] 2.5 Worst anomalies strip with ranking, row click, group counts, live
 - [x] 2.6 Show only one line in legends and the side panel table
 
+## 2b. Feedback of 22 Nov
+- [x] 2.7 Opening a line highlights it on its graphs (bold, others faded, labelled band, peak dot); the panel has no graph and the page makes room
+- [x] 2.8 A visible enlarge button on every graph, including each small graph of a split group
+
 ## 3. Finish
 - [x] 3.1 Build, tests, restart; screenshots at 100%, 200% and 75%, light and dark; memory check
 - [x] 3.2 README and `docs/verification/redesign-dashboard.md`

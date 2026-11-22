@@ -39,3 +39,13 @@ All tests: contracts 28, collector 126, store 18, detector 69, notifier 31, repo
 The Lab dashboard's stored success rates for its last saved minutes read 142–149%, which a success rate cannot be.
 Datadog has no lab data for that time any more, so it cannot be compared here. This belongs with the open Success Rate
 check (fix-backfill-faults task 3.4), together with the user's own panel.
+
+## Feedback of 22 Nov: anomalies on the graph itself, enlarge everywhere
+| Check (headless Chrome) | Result |
+|---|---|
+| Enlarge buttons | Lab: 12 of 12 widgets and 31 of 31 small graphs have ⤢, visible without hovering (was: hover only, none on small graphs) |
+| Enlarge one small graph | "Success Rates · api: /v1/devices": only that API's line and one table row; breadcrumb Success Rates › api value |
+| Open a line from Worst anomalies | Swagstore `resource_name=get_/`: "Latency by page (p95)" draws it bold, the other 7 faded, band labelled "latency up · 5×"; the panel has details and the reason box, no graph; the page moves 380 px left to make room |
+| Close the panel | No graph keeps a highlight; the page takes its full width again |
+| Peak dot | Drawn at the highest (or, for a drop, lowest) value inside each band; not seen live because the lab traffic is off and the line has no values in the range |
+| Script errors | None; Notifier tests 31/31 |

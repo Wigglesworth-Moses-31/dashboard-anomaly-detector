@@ -70,7 +70,7 @@ A switch in the top bar SHALL choose Comfortable (default) or Compact sizes, rem
 Each dashboard SHALL start with a "Worst anomalies" strip: its anomalies ranked by state (open, needs a reason,
 closed, past), then by size × minutes lasted, size being how far the worst line is from normal. It SHALL show the top
 5, unfold to all, and update live. Each row SHALL show rank, service, line, signal, size, how long and state; clicking
-it SHALL scroll to its widget, show only that line and open its side panel. Group headers SHALL show their anomaly
+it SHALL scroll to its widget, highlight that line there and open its details panel. Group headers SHALL show their anomaly
 count, also when folded.
 
 #### Scenario: Ranking
@@ -79,7 +79,7 @@ count, also when folded.
 
 #### Scenario: Click a row
 - **WHEN** the first row is clicked
-- **THEN** the page scrolls to its widget, that widget shows only the line of the anomaly, and the side panel opens on it
+- **THEN** the page scrolls to its widget, that widget highlights the line of the anomaly, and the details panel opens on it
 
 #### Scenario: No anomalies
 - **WHEN** a dashboard has no anomalies in the chosen range
@@ -104,3 +104,25 @@ While the Collector catches up after a start, the top bar SHALL show "Catching u
 #### Scenario: After a night off
 - **WHEN** the system starts after 9 hours off
 - **THEN** the top bar shows "Catching up 9 h · 0%" rising to 100%, then nothing
+
+### Requirement: Anomalies show on the graph itself
+Opening a line SHALL highlight it on every graph of the dashboard that draws it: the line bold, the others faded, its
+anomaly bands labelled with what happened, and a dot at each anomaly's peak. The details panel SHALL hold the line's
+details, anomalies and reason box without a graph of its own, and the page SHALL make room for it so the graph stays
+visible. Closing the panel SHALL end the highlight.
+
+#### Scenario: Open a line
+- **WHEN** `api=/v1/devices` latency is opened while its anomaly of 3.2 × lasted from 10:02 to 10:09
+- **THEN** the Latencies graph draws that line bold and the others faded, labels the band "latency up · 3.2×", marks its peak with a dot and its value, and the panel beside it shows the details and reason box with no graph
+
+#### Scenario: Close the panel
+- **WHEN** the panel is closed
+- **THEN** every graph draws all its lines normally again
+
+### Requirement: Every graph can be enlarged
+Every graph SHALL have a visible enlarge button, without needing to hover first, including each small graph of a split
+group. Enlarging a small graph SHALL show only that graph's lines, titled with its group and tag value.
+
+#### Scenario: One API's graph
+- **WHEN** the enlarge button of the `api: /v1/devices` graph inside "Success Rates" is clicked
+- **THEN** a full-screen view shows only `/v1/devices`'s success rate, titled "Success Rates · api: /v1/devices", with its lines table

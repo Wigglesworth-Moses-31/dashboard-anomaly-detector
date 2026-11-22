@@ -379,7 +379,10 @@ function timeseriesOption(spec) {
   const lines = spec.only && !legendShown ? all.filter((l) => spec.only.has(l)) : all;
   const unit = lineInfo.get(lines[0] || all[0])?.line.unit;
   const pal = palette(spec.palette);
-  const areas = shadingFor(spec.lines, from);
+  // redesign-dashboard 2.7: an opened line is drawn bold with its own labelled bands and peak dots, the others faded
+  const focus = spec.focus && lines.includes(spec.focus) ? spec.focus : null;
+  const areas = focus ? [] : shadingFor(spec.lines, from);
+  const marks = focus ? focusMarks(focus, from, unit) : null;
   const display = spec.display || "line";
   spec._names = new Map();
   const s = lines.map((id) => {
@@ -391,8 +394,12 @@ function timeseriesOption(spec) {
       showSymbol: false, data: series.get(id) || [], color: pal[i % pal.length], animation: false, barMaxWidth: 8,
       stack: display === "bars" || display === "area" ? "s" : undefined,
       areaStyle: display === "area" ? { opacity: 0.35 } : undefined,
-      lineStyle: { width: spec.kind === "metric" || spec.kind === "big" ? 2 : 1.5 }, emphasis: { focus: "series" },
-      markArea: id === lines[0] && areas.length ? { silent: false, data: areas, label: { show: false } } : undefined,
+      lineStyle: { width: (spec.kind === "metric" || spec.kind === "big" ? 2 : 1.5) + (id === focus ? 1.5 : 0), opacity: focus && id !== focus ? 0.18 : 1 },
+      z: id === focus ? 5 : 2, emphasis: { focus: "series" },
+      markArea: focus ? (id === focus && marks.areas.length ? { silent: false, data: marks.areas } : undefined)
+        : id === lines[0] && areas.length ? { silent: false, data: areas, label: { show: false } } : undefined,
+      markPoint: id === focus && marks.points.length ? { symbol: "circle", symbolSize: 9, data: marks.points,
+        label: { show: true, position: "top", formatter: (p) => p.value, fontSize: fpx(11), fontWeight: 600, color: "inherit" } } : undefined,
     };
   });
   const c = axisColors(), f = fpx(11);
@@ -416,6 +423,48 @@ function topLines(lines, n) {
   return [...lines].sort((a, b) => peak(b) - peak(a)).slice(0, n);
 }
 const lastValue = (id) => { const s = series.get(id) || []; return s.length ? s[s.length - 1][1] : null; };
+
+/** The opened line's anomalies: one labelled band each ("latency up · 3.2×") and a dot at its peak inside the band. */
+function focusMarks(lineId, from, unit) {
+  const areas = [], points = [], pts = series.get(lineId) || [];
+  for (const id of incidentsOfLine.get(lineId) || []) {
+    const inc = incidents.get(id);
+    if (!inc) continue;
+    const s = (inc.series || []).find((x) => x.series_id === lineId);
+    if (!s) continue;
+    const start = Math.max(from, Number(inc.started_ms)), end = Number(inc.ended_ms) || Date.now();
+    if (end < from) continue;
+    const st = anomalyState(inc), live = st === "open" || st === "waiting", color = live ? "#d64541" : "#8a919e";
+    const label = [s.signal, s.direction ?? s.reason].filter(Boolean).join(" ") + " · " + change(s);
+    areas.push([{ name: label, xAxis: start, itemStyle: { color: live ? "rgba(217,58,58,0.13)" : "rgba(138,145,158,0.16)" },
+      label: { show: true, position: "insideTopLeft", color, fontSize: fpx(11), fontWeight: 600 } }, { xAxis: end }]);
+    const down = /down|drop|silent/.test(String(s.direction ?? s.reason ?? ""));
+    let best = null;
+    for (const p of pts) if (p[0] >= start && p[0] <= end && (best == null || (down ? p[1] < best[1] : p[1] > best[1]))) best = p;
+    if (best) points.push({ coord: best, value: axisNum(best[1], unit), itemStyle: { color } });
+  }
+  return { areas, points };
+}
+/** Marks the opened line on every graph that draws it (and ends that when the panel closes); brings it into view. */
+function applyFocus(lineId) {
+  let first = null;
+  for (const ch of document.querySelectorAll(".chart")) {
+    const spec = ch._spec;
+    if (!spec || spec.option) continue;
+    const want = lineId && spec.lines.includes(lineId) ? lineId : null;
+    if (want && !first && ch.closest("#incidentsView")) first = ch;
+    if ((spec.focus || null) === want) continue;
+    spec.focus = want;
+    const c = charts.get(ch);
+    if (c) c.chart.setOption(timeseriesOption(spec), { replaceMerge: ["series"] });
+  }
+  if (first && !$("fullScreen")) {
+    const inner = first.closest(".dd-inner");
+    if (inner && inner.hidden) inner.previousSibling.click();
+    const r = first.getBoundingClientRect();
+    if (r.top < 60 || r.bottom > innerHeight) (first.closest(".split-cell") || first).scrollIntoView({ block: "center" });
+  }
+}
 
 /** Shaded anomaly times: red where open or waiting, grey for past, BAU and closed; overlaps merged. */
 function shadingFor(lines, from) {
@@ -599,11 +648,14 @@ function drawTopBar() {
   }
   bar.append(seg, el("span", "tb-sep", "›"), dashPicker(site, r.dash));
   if (r.page === "dash" && r.widget) {
-    const box = [...document.querySelectorAll(".widget")].find((b) => b._widget && String(b._widget.w.id || b._widget.panel?.id) === r.widget);
+    const base = String(r.widget).split("|")[0];
+    const box = [...document.querySelectorAll(".widget")].find((b) => b._widget && String(b._widget.w.id || b._widget.panel?.id) === base);
     const group = box && box.closest(".dd-group");
     const crumbs = el("span", "crumbs");
     if (group) crumbs.append(el("span", "tb-sep", "›"), el("span", null, group.querySelector(".dd-group-head span:nth-child(2)")?.textContent || ""));
     if (box) crumbs.append(el("span", "tb-sep", "›"), el("span", null, box.querySelector(".w-title")?.textContent || ""));
+    const cell = String(r.widget).includes("|") ? String(r.widget).slice(String(r.widget).indexOf("|") + 1) : null;
+    if (cell != null) crumbs.append(el("span", "tb-sep", "›"), el("span", null, cell));
     bar.append(crumbs);
   }
   bar.append(el("span", "tb-space"));
@@ -1060,16 +1112,24 @@ function splitBody(body, def, lines) {
   const grid = el("div", "split-grid");
   body.append(grid);
   const st = requestStyle(def.source_widget_definition || {});
+  const wbox = body.closest(".widget"), wkey = wbox && wbox._widget ? String(wbox._widget.w.id || wbox._widget.panel?.id) : "";
   for (const [v, ls] of [...groups.entries()].slice(0, limit)) {
-    const full = (tag ? tag + ": " : "") + v, t = el("div", "split-title", midTitle(full)); t.title = full;   // R3
-    const cell = el("div", "split-cell"); cell.append(t); cell._lines = ls;
+    const full = (tag ? tag + ": " : "") + v, t = el("span", "split-title", midTitle(full)); t.title = full;   // R3
+    const cell = el("div", "split-cell"); cell._lines = ls; cell._value = v;
+    const head = el("div", "split-head"); head.append(t);
+    if (wkey) {                                                                       // 2.8: every small graph can be enlarged
+      const big = el("button", "w-menu", "⤢"); big.type = "button"; big.title = "View " + full + " in full screen";
+      big.addEventListener("click", () => setQuery("widget", wkey + "|" + v));
+      head.append(big);
+    }
+    cell.append(head);
     const chart = el("div", "chart"); cell.append(chart); grid.append(cell);
     watchChart(chart, { lines: ls, kind: "split", palette: st.palette, display: st.display, showLegend: false });
   }
 }
 
 // ---- overlays: full-screen widget, side panel for a line (K6) ----------------------------------------------------------
-function closeOverlays() { for (const id of ["fullScreen", "sidePanel"]) { const o = $(id); if (o) { unwatchAll(o); o.remove(); } } }
+function closeOverlays() { for (const id of ["fullScreen", "sidePanel"]) { const o = $(id); if (o) { unwatchAll(o); o.remove(); } } document.body.classList.remove("panel-open"); }
 function drawOverlays() {
   const r = current;
   const fs = $("fullScreen"), sp = $("sidePanel");
@@ -1077,6 +1137,8 @@ function drawOverlays() {
   if (sp && sp.dataset.key !== String(r.line)) { unwatchAll(sp); sp.remove(); }
   if (r.widget && !$("fullScreen")) drawFullScreen(r.widget);
   if (r.line && !$("sidePanel")) drawSidePanel(r.line);
+  document.body.classList.toggle("panel-open", !!r.line);           // 2.7: the page makes room, the graph stays visible
+  applyFocus(r.line || null);
 }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || !current || current.page !== "dash") return;
@@ -1084,15 +1146,26 @@ document.addEventListener("keydown", (e) => {
 });
 
 function drawFullScreen(key) {
-  const box = [...document.querySelectorAll(".widget")].find((b) => b._widget && String(b._widget.w.id || b._widget.panel?.id) === key);
+  const bar = key.indexOf("|"), base = bar < 0 ? key : key.slice(0, bar), cellValue = bar < 0 ? null : key.slice(bar + 1);
+  const box = [...document.querySelectorAll(".widget")].find((b) => b._widget && String(b._widget.w.id || b._widget.panel?.id) === base);
   if (!box) return;
-  const { w, panel } = box._widget;
+  const { w } = box._widget;
+  let panel = box._widget.panel;
   const def = w.definition || {};
+  let cellTitle = "";
+  if (cellValue != null && panel) {                                                   // 2.8: one small graph of a split group
+    const cell = [...box.querySelectorAll(".split-cell")].find((c) => c._value === cellValue);
+    if (cell) {
+      const keep = new Set(cell._lines);
+      panel = Object.assign({}, panel, { lines: panel.lines.filter((l) => keep.has(l.id)) });
+      cellTitle = " · " + (cell.querySelector(".split-title")?.title || cellValue);
+    }
+  }
   const ov = el("div", "overlay"); ov.id = "fullScreen"; ov.dataset.key = key;
   const card = el("div", "fs-card");
   const head = el("div", "fs-head");
   const close = el("button", "w-menu", "✕"); close.type = "button"; close.addEventListener("click", () => setQuery("widget", null));
-  head.append(el("h2", "fs-title", def.title || panel?.title || ""), timeBar(() => route()), close);
+  head.append(el("h2", "fs-title", (def.title || panel?.title || "") + cellTitle), timeBar(() => route()), close);
   card.append(head);
   ov.addEventListener("click", (e) => { if (e.target === ov) setQuery("widget", null); });
   ov.append(card); document.body.append(ov);
@@ -1148,8 +1221,7 @@ async function drawSidePanel(lineId) {
   if (!info) { ov.append(el("div", "empty", "This metric is not in the catalogue (yet).")); return; }
   const { line, places } = info, p0 = places[0];
   if (!series.has(lineId)) { try { await loadRange("/dash/line?id=" + lineId + "&range=" + range, [lineId]); } catch (e) { /* shown empty */ } }
-  const chart = el("div", "chart metric"); ov.append(chart);
-  watchChart(chart, { lines: [lineId], kind: "metric", palette: "dog_classic" });
+  // 2.7: no graph of its own here; the line is highlighted on the dashboard's graphs (applyFocus)
   const pts = series.get(lineId) || [], last = pts.length ? pts[pts.length - 1] : null;
   const newest = [...(incidentsOfLine.get(lineId) || [])].map((i) => incidents.get(i)).filter(Boolean).sort((a, b) => Number(b.started_ms) - Number(a.started_ms))[0];
   const s = newest ? (newest.series || []).find((x) => x.series_id === lineId) : null;
@@ -1489,7 +1561,7 @@ function drawWorst(box, dash) {
   rows.append(hr);
   list.slice(0, all ? list.length : 5).forEach((x, i) => {
     const r = el("button", "worst-row"); r.type = "button"; r.title = x.inc.title || "";
-    const sig = [x.s.signal, x.s.direction].filter(Boolean).join(" ");
+    const sig = [x.s.signal, x.s.direction ?? x.s.reason].filter(Boolean).join(" ");
     r.append(el("span", "num", String(i + 1)), el("span", "ellip", serviceName(x.inc)), el("span", "ellip", seriesName(x.s)),
       el("span", "ellip", sig), el("span", "num", change(x.s)), el("span", "num", duration(x.minutes * 60000)), el("span", "pill-s st-" + x.state, STATE_WORD[x.state]));
     r.addEventListener("click", () => focusLine(x.s.series_id));
@@ -1497,7 +1569,7 @@ function drawWorst(box, dash) {
   });
   box.append(rows);
 }
-/** Scrolls to the line's widget (unfolding its group), shows only that line there, and opens its side panel. */
+/** Scrolls to the line's widget (unfolding its group) and opens the line: highlighted on its graphs, details beside them. */
 function focusLine(id) {
   const box = [...document.querySelectorAll("#incidentsView .widget")].find((w) => w._lines && w._lines.includes(id));
   if (box) {
@@ -1506,11 +1578,6 @@ function focusLine(id) {
     const cell = [...box.querySelectorAll(".split-cell")].find((c) => c._lines && c._lines.includes(id)) || box;
     cell.scrollIntoView({ block: "center" });
     box.classList.add("flash"); setTimeout(() => box.classList.remove("flash"), 1600);
-    for (const ch of box.querySelectorAll(".chart")) {
-      if (!ch._spec || ch._spec.option || !ch._spec.lines.includes(id)) continue;
-      ch._spec.only = ch._spec.lines.length > 1 ? new Set([id]) : null;
-      const c = charts.get(ch); if (c) c.chart.setOption(timeseriesOption(ch._spec), { replaceMerge: ["series"] });
-    }
   }
   openLine(id);
 }

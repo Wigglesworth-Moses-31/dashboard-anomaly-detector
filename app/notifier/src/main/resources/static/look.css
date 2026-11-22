@@ -180,3 +180,12 @@ a.dl-row:hover { background: var(--hover); } .dl-title { font-weight: 550; color
 @media (max-width: 900px) { .worst-row { grid-template-columns: 24px minmax(0, 1fr) 80px 100px; } .worst-row > :nth-child(2), .worst-row > :nth-child(4), .worst-row > :nth-child(6) { display: none; } }
 /* R6 */
 .legend tr.dim td { opacity: .45; } .row-open { opacity: .7; font-size: 12px; }
+/* redesign-dashboard 2.8: enlarge is always visible, on every graph and every small graph of a split group */
+.w-menu { opacity: .6; } .widget:hover .w-menu, .split-cell:hover .w-menu, .w-menu:focus-visible { opacity: 1; }
+.split-head { display: flex; align-items: center; gap: 4px; padding-right: 4px; min-width: 0; }
+.split-head .split-title { flex: 1; min-width: 0; display: block; }
+.split-head .w-menu { font-size: calc(13px * var(--z)); padding: 2px 4px; }
+/* 2.7: the details panel sits beside the page (no graph of its own) and the page makes room for it */
+.side-panel { width: min(380px, 100vw); box-shadow: none; }
+body.panel-open .dd-main, body.panel-open .topbar { margin-right: 380px; }
+@media (max-width: 900px) { body.panel-open .dd-main, body.panel-open .topbar { margin-right: 0; } }
