@@ -12,7 +12,7 @@ anomaly:
     rsocket-port: 7104                        # the page connects here (RSocket over WebSocket)
     day-by: started                           # started | received (received: demos of older recordings show as today)
     max-queued-updates-per-viewer: 2000       # a slow page gets the latest state per incident, at most this many
-# The time zone ("today", and the times on the page) is shared with the Reporter: application.yml anomaly.shared.time-zone
+# The time zone ("today", and the times on the page) is the shared setting application.yml anomaly.shared.time-zone
     dashboards:                               # add-dashboard-view, keep-ten-days: the live dashboard pages
       ranges: [15m, 30m, 1h, 3h, 6h, 12h, 1d]  # every range live, auto interval like Datadog (10s .. 5m, at most 300 points)
       points-per-line: 600                    # most points of one line sent to a page (min-max thinning keeps spikes)

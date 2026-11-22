@@ -14,11 +14,12 @@ service StoreService {
   rpc Ping (PingRequest) returns (PingReply);
   // Points of one line between two times, oldest first, at most 1000 points per chunk.
   rpc GetHistory (HistoryRequest) returns (stream HistoryChunk);
-  // One summary per metric line for one local day (used by the Reporter).
+  // One summary per metric line for one local day (was used by the Reporter; unused since remove-reporter).
   rpc GetDaySummary (DaySummaryRequest) returns (stream SeriesDaySummary);
   // One summary per metric line for any time window, e.g. the last 6 hours (added by add-store, option A).
   rpc GetSummary (SummaryRequest) returns (stream SeriesSummary);
-  // Removes raw points older than a time, never newer than 3 hours ago (added by add-reporter, design R6).
+  // Removes raw points older than a time, never newer than 3 hours ago (added by add-reporter, design R6; unused
+  // since remove-reporter: the Store's own raw-safety-limit removes old raw points).
   rpc RemoveRawBefore (RemoveRawRequest) returns (RemoveRawReply);
   // Every metric line the Store knows, with its full description (added by add-dashboard-view, design D1).
   rpc ListSeries (ListSeriesRequest) returns (stream SeriesDescriptor);

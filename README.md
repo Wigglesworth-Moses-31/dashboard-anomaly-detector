@@ -1,16 +1,14 @@
 # Dashboard Anomaly Detector
 
 Watches your Datadog dashboards every 15 seconds, in one or several Datadog regions at once (for example US and EU), catches **short spikes** that monitors miss or report late,
-groups them into **one incident per problem**, shows them on a **live page** within seconds, and writes a
-**Markdown report** per day. You bring a Datadog account and the dashboards you already have; nothing is created or
+groups them into **one anomaly per graph**, and shows them on a **live page** within seconds. You bring a Datadog account and the dashboards you already have; nothing is created or
 changed in Datadog.
 
 ```
                         ┌──────────────────────── Config Service (settings from config-repo/, live reload) ───────────┐
-Datadog dashboards ──► Collector ──► Kafka ──► Store (TimescaleDB, 2 days)        ◄── gRPC ──┐                        │
+Datadog dashboards ──► Collector ──► Kafka ──► Store (TimescaleDB, 1 day)         ◄── gRPC ──┐                        │
    (read-only API)        metric-series                                                      │                        │
-                          metric-points ──► Detector ──► incidents ──► Kafka incident-events ├──► Notifier ──► live page (RSocket)
-                                                                                             └──► Reporter ──► reports/<day>.md
+                          metric-points ──► Detector ──► incidents ──► Kafka incident-events └──► Notifier ──► live page (RSocket)
 ```
 
 | Service | What it does | Port |
@@ -20,7 +18,6 @@ Datadog dashboards ──► Collector ──► Kafka ──► Store (Timescal
 | Store | Keeps every value once (TimescaleDB), per-minute summaries, answers history questions (gRPC 9102) | 8102 |
 | Detector | Learns each line's normal (sliding median), spots spikes, drops and silence, groups them into incidents | 8103 |
 | Notifier | Live dashboards per region with anomalies (RSocket on 7104, values over SSE), Settings | **8104** |
-| Reporter | One Markdown report per window (a day by default), then cleans the reported raw values | 8105 |
 
 Java 25, Spring Boot 4, Kafka 4 (KRaft), TimescaleDB on Postgres 17, gRPC, RSocket, Protobuf. Every setting lives
 outside the code. The design, every requirement and how each was verified are in `openspec/` and `docs/`.
@@ -83,8 +80,7 @@ Then open **http://localhost:8104**. The page fills as soon as the Detector has 
 
 | Where | What you see |
 |---|---|
-| http://localhost:8104 | **Live dashboards that look and work like Datadog's**. A **top bar** always shows the region (US · EU), a **dashboard picker** (type to search; each with its open anomalies), the time picker (Past 15 Minutes … 1 Day) with Datadog's **auto interval** (10 s … 5 m, at most 300 points; average, or sum for counts; formula lines are averaged), Live (❚❚ pauses), **Comfortable / Compact** and the **graph size − 100% +**; the left bar has Dashboards, Anomalies, Settings and the counter "● 3 open · 2 need a reason". Each dashboard starts with **Worst anomalies**: its anomalies ranked open first, then needing a reason, then by size × minutes (top 5, "Show all"); a row scrolls to the widget, shows only that line and opens its side panel. Widgets keep the **order and groups of the exported JSON**, but graphs have sizes in page units: **zooming the browser in makes graphs bigger with fewer per row, zooming out makes them smaller with more per row** (the graph size control does the same for graphs only). Split groups draw one graph per tag value, at least 320 × 160, with long titles shortened in the middle. Widgets are drawn by type (timeseries, query values, top lists, tables, sunbursts, split groups, notes); a dot by a title marks an open (red), waiting (amber) or past (grey) anomaly, and a light band marks each anomaly's own time. **Clicking a legend entry shows only that line** (again: all; Ctrl/Cmd-click adds or removes one), also in the full-screen table. Hovering shows the same moment on every graph; **⤢** (on every graph, including each small graph of a split group) opens it full screen; opening a line **highlights it on its own graphs** (bold, others faded, its anomaly bands labelled, a dot at each peak) and shows a slim panel beside them with details, its anomalies of the last 24 hours and the reason box. The **Anomalies** page lists every anomaly as **region › dashboard › service › anomaly**. 🔔 and 🔊 notify new anomalies. Light or dark follows the computer. Charts exist only near the screen and live values are sent only for those |
-| `reports/2026-11-16.md` | The day's report, written shortly after midnight in your time zone |
+| http://localhost:8104 | **Live dashboards that look and work like Datadog's**. A **top bar** always shows the region (US · EU), a **dashboard picker** (type to search; each with its open anomalies), the time picker (Past 15 Minutes … 1 Day) with Datadog's **auto interval** (10 s … 5 m, at most 300 points; average, or sum for counts; formula lines are averaged), Live (❚❚ pauses), **Comfortable / Compact** and the **graph size − 100% +**; the left bar has Dashboards, Anomalies, Settings and the counter "● 3 open · 2 need a reason". Each dashboard starts with **Worst anomalies**: its anomalies ranked open first, then needing a reason, then by size × minutes (top 5, "Show all"); a row scrolls to the widget, shows only that line and opens its side panel. Widgets keep the **order and groups of the exported JSON**, but graphs have sizes in page units: **zooming the browser in makes graphs bigger with fewer per row, zooming out makes them smaller with more per row** (the graph size control does the same for graphs only). Split groups draw one graph per tag value, at least 320 × 160, with long titles shortened in the middle. Widgets are drawn by type (timeseries, query values, top lists, tables, sunbursts, split groups, notes); a dot by a title marks an open (red), waiting (amber) or past (grey) anomaly, and a light band marks each anomaly's own time. **Clicking a legend entry shows only that line** (again: all; Ctrl/Cmd-click adds or removes one), also in the full-screen table. Hovering shows the same moment on every graph; **⤢** (on every graph, including each small graph of a split group) opens it full screen; opening a line **highlights it on its own graphs** (bold, others faded, its anomaly bands labelled, a dot at each peak) and shows a slim panel beside them with details, its anomalies of the last 24 hours and the reason box. The **Anomalies** page lists every anomaly as **region › dashboard › panel › anomaly**. 🔔 and 🔊 notify new anomalies. Light or dark follows the computer. Charts exist only near the screen and live values are sent only for those |
 | `http://localhost:810x/actuator/health` | Each service's state and numbers (lines watched, lag, database size, rules in use...). The Collector shows one block per source: keys present, budget, calls, throttling, open breakers |
 | `run/<service>.log` | Logs |
 
@@ -99,8 +95,6 @@ scripts/peek.sh kafka                 # messages per topic, and whether the Stor
 
 A panel with lines but no recent value means its queries return nothing right now: no traffic, or a dashboard
 filter that matches nothing.
-
-Ask for a report of a day yourself: `curl -s -X POST localhost:8105/reports/2026-11-16`.
 
 ## Change settings (no restart)
 
@@ -134,7 +128,7 @@ git commit -am "watch one more dashboard"
 ```
 
 A hook tells the Config Service, which pushes the change to every running service within seconds. A change that
-breaks a rule (for example a 48-hour report window) is **refused**, the old value stays, and the service's
+breaks a rule (for example a 3-day history in `detector.yml`) is **refused**, the old value stays, and the service's
 `/actuator/settings` page says why.
 
 | You want to | Change |
@@ -152,7 +146,6 @@ breaks a rule (for example a 48-hour report window) is **refused**, the old valu
 | Which APIs call which upstream service | Settings tab › **Upstreams** (or `upstreams.yml`): per region, `upstream: [api, …]`. An upstream's anomaly then shows **Called by** (each API with its state now), an API's shows **Calls** |
 | Which day is "today" | `application.yml` → `anomaly.shared.time-zone` (default `UTC`) |
 | Which time zones every time is shown in | `application.yml` → `anomaly.shared.display-time-zones` (default `[UTC, Asia/Kolkata, America/New_York]`, the first is the main one) |
-| Reports every 6 hours instead of daily | `reporter.yml` → `window: 6h` (1, 2, 3, 4, 6, 8, 12 or 24 hours) |
 
 ### Onboarding a dashboard: check before you run
 
@@ -212,13 +205,16 @@ the Settings tab moves `sources:` out of `collector.yml` in its own commit, comm
 its keys from `.env` itself (start with the new `scripts/system.sh`). A `collector.yml` in the old single-site form
 (`datadog-site` with `dashboards`) is shown read-only in the Settings tab: run `scripts/setup.sh` again to manage
 regions there. Since 21 Nov 2026: everything is kept 24 hours — in `store.yml` set `raw-safety-limit: 1d`,
-`summary-retention: 1d`, `history-max-range: 1d`; in `detector.yml` `incident-retention: 1d`; in `reporter.yml`
-`catch-up: 1d` (the Kafka topics are changed by `scripts/system.sh start`). Optional: `backfill-new-views: 1d` in
+`summary-retention: 1d`, `history-max-range: 1d`; in `detector.yml` `incident-retention: 1d` (the Kafka topics are changed by `scripts/system.sh start`). Optional: `backfill-new-views: 1d` in
 `collector.yml`; the dashboard `ranges` in `notifier.yml` are 15m, 30m, 1h, 3h, 6h, 12h, 1d by default. Also `max-database-size: 10GB` in `store.yml`.
 
 `scripts/system.sh start` now lists every setting of this kind where your `config-repo` differs from the template
 (`scripts/check-config.sh`, run it any time). It only reads: edit the file it names, then commit in `config-repo`.
 A setting that is missing is not listed, because the service's default is the template's value.
+
+Since 22 Nov 2026 there is **no Reporter** (no daily Markdown report; the Anomalies page replaces it). A
+`reporter.yml` left in your `config-repo` is not read any more; delete it there if you like. `scripts/system.sh stop`
+still stops a Reporter left running by an older version. Reports already written stay in `reports/`.
 
 Since 22 Nov 2026: anomalies are one per graph by default (`incident-scope: graph`; nothing to edit, add
 `incident-scope: service` to `detector.yml` for the older grouping). `upstreams.yml` is new and optional: the Settings
@@ -282,7 +278,7 @@ PLATFORM_DB_PASSWORD=... ./mvnw test -Dlive.db=true   # also the database tests 
 | Collector health: open breakers for one source | That site is down or refuses those panels; the other sources keep their timing |
 | The page says "reconnecting" | `scripts/system.sh status`; `run/notifier.log` |
 | A setting did not change | `curl localhost:810x/actuator/settings`: `lastRejected` says why |
-| Store health DEGRADED | Database over 10 GB: is the Reporter running? (`localhost:8105/actuator/health`) |
+| Store health DEGRADED | Database over 10 GB: check `raw-safety-limit` and `summary-retention` in `store.yml` (`localhost:8102/actuator/health` shows the sizes) |
 
 ## Layout
 

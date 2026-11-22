@@ -6,7 +6,7 @@ import lab.anomaly.kit.settings.SettingsValidator;
 
 /**
  * The Notifier's settings (config-repo/notifier.yml, prefix {@code anomaly.notifier}), design N7. Immutable.
- * The time zone ("today") is the shared setting {@code anomaly.shared.time-zone}, used by the Reporter too.
+ * The time zone ("today") is the shared setting {@code anomaly.shared.time-zone}.
  *
  * @param rsocketPort               WebSocket port for pages
  * @param dayBy                     {@code started}: an incident's day is the day it started; {@code received}: the day

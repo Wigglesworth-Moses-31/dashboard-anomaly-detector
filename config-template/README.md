@@ -11,7 +11,6 @@ its settings: nothing is fixed in code.
 | `detector.yml` | Detector | `rules`, `group-by` |
 | `store.yml` | Store | storage limits (2 days by default, at most 7) |
 | `notifier.yml` | Notifier | `day-by` |
-| `reporter.yml` | Reporter | `window` (1h to 24h) |
 
 ## Change a setting (no restart)
 ```bash

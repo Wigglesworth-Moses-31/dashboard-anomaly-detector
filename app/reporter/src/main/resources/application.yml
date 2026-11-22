@@ -1,9 +1,0 @@
-# Only what is needed to reach the Config Service; every other setting comes from config-repo/.
-spring:
-  application:
-    name: reporter
-  config:
-    import: "configserver:http://localhost:8888"
-  cloud:
-    config:
-      fail-fast: true       # stop at start if the Config Service cannot be reached

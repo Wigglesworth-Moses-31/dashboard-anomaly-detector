@@ -12,7 +12,7 @@ always match the real contracts.** Refresh them after a contract change with
 | `SeriesDescriptor` | Collector → Store, Detector | Kafka `metric-series` (compacted) | `series_id` | When a line is first seen or changes |
 | `MetricPoints` | Collector → Store, Detector | Kafka `metric-points` | `series_id` | Every poll (about every 15 s per line) |
 | `IncidentEvent` | Detector → Notifier | Kafka `incident-events` | `incident_id` | When an incident opens, changes or closes |
-| `StoreService` | Detector, Reporter, Notifier → Store | gRPC, port 9102 | - | On demand |
+| `StoreService` | Collector, Detector, Notifier → Store | gRPC, port 9102 | - | On demand |
 | `incidents.live` | Notifier → web page | RSocket over WebSocket, port 7104 | - | Live |
 
 ## Rules every message follows
@@ -154,7 +154,7 @@ carries `ResolveIncident` (command id, incident id, reason of 1–500 characters
 | `GetSummary(from_ms, to_ms)` | Every line's summary for **any window** `[from, to)`, e.g. the last 6 hours (added by add-store) | A stream of `SeriesSummary`: the same numbers plus the window |
 | `ListSeries()` | Every line the Store knows (added by add-dashboard-view: the Notifier's catalogue of dashboards and panels) | A stream of `SeriesDescriptor` |
 | `GetHistoryBatch(series_ids, from_ms, to_ms, resolution)` | Many lines (at most 1000) over one range in one question (add-dashboard-view) | A stream of chunks, each naming its line; per minute, each minute gives its lowest value at the minute and its highest 30 s later |
-| `RemoveRawBefore(before_ms)` | Remove raw points older than a time (added by add-reporter, after a verified report). Never newer than 3 hours ago, which the per-minute summaries are refreshed from; a time in the future is refused | `removed_points`, `effective_before_ms` (the time actually used) |
+| `RemoveRawBefore(before_ms)` | Remove raw points older than a time (added by add-reporter; unused since remove-reporter). Never newer than 3 hours ago, which the per-minute summaries are refreshed from; a time in the future is refused | `removed_points`, `effective_before_ms` (the time actually used) |
 
 ## incidents.live (RSocket)
 Request-stream on `ws://localhost:7104`: first every incident of the day (open and closed, open first), then one

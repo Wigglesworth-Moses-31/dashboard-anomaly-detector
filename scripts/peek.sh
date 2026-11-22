@@ -5,8 +5,8 @@
 #   scripts/peek.sh flowing           is data arriving right now? (values in the last 5 minutes, how fresh)
 #   scripts/peek.sh watch             'flowing' every 10 seconds (Ctrl-C to stop)
 #   scripts/peek.sh kafka             messages per topic, and how far behind each reader is
-# Needs the platform running (scripts/system.sh start). Raw 10-second values are kept a few hours (the Reporter
-# removes them after each report); per-minute values 2 days, so 'panel' falls back to per-minute values.
+# Needs the platform running (scripts/system.sh start). Raw 10-second values are kept 1 day (raw-safety-limit in
+# store.yml), per-minute values as long as summary-retention; 'panel' falls back to per-minute values.
 set -euo pipefail
 
 sql() {

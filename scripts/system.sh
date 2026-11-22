@@ -6,7 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN="$ROOT/run"
-SERVICES=(collector:8101 store:8102 detector:8103 notifier:8104 reporter:8105)
+SERVICES=(collector:8101 store:8102 detector:8103 notifier:8104)   # the Reporter was removed (remove-reporter)
 COMPOSE=(docker compose --env-file "$ROOT/.env" -p anomaly-platform -f "$ROOT/platform/docker-compose.platform.yml")
 
 wait_for() {  # url seconds
@@ -14,8 +14,8 @@ wait_for() {  # url seconds
   return 1
 }
 
-health() {  # port -> status text
-  curl -fs "localhost:$1/actuator/health" 2>/dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["status"])' 2>/dev/null || echo "down"
+health() {  # port -> status text (at most 5 s: a stuck service shows as down, never hangs)
+  curl -fs -m 5 "localhost:$1/actuator/health" 2>/dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["status"])' 2>/dev/null || echo "down"
 }
 
 start_service() {  # name port [with-datadog-keys]
@@ -83,6 +83,7 @@ start() {
 
 stop() {
   echo "Services:"
+  # "reporter" stays in this list only to stop one left running by an older version (remove-reporter)
   for name in reporter notifier detector store collector config-service; do
     if [ -f "$RUN/$name.pid" ]; then
       pid="$(cat "$RUN/$name.pid")"

@@ -26,7 +26,6 @@
     <module>store</module>
     <module>detector</module>
     <module>notifier</module>
-    <module>reporter</module>
   </modules>
 
   <properties>

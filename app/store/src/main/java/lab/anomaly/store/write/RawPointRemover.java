@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * Removes raw points older than a time, on the Reporter's request after a verified report (add-reporter design R6).
+ * Removes raw points older than a time, on request (add-reporter design R6). No service asks since remove-reporter.
  *
  * <ul>
  *   <li>Floor: never newer than {@link #FLOOR} (3 hours) ago. The per-minute summaries are refreshed from raw points

@@ -3,7 +3,7 @@
 # It only reads: config-repo holds your own settings and is never changed here. These files hold no secrets.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KEYS="raw-safety-limit summary-retention history-max-range max-database-size backfill-new-views settle-delay incident-retention catch-up"
+KEYS="raw-safety-limit summary-retention history-max-range max-database-size backfill-new-views settle-delay incident-retention"
 
 value() {  # file key -> first value of that key, without its comment
   sed -n -E "s/^[[:space:]]*$2:[[:space:]]*([^#]*).*/\1/p" "$1" 2>/dev/null | head -1 | sed -E 's/[[:space:]]+$//'

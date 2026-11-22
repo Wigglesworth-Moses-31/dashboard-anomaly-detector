@@ -4,7 +4,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Datadog sites as people say them (add-multi-site design M9). One place, so the Detector, Notifier and Reporter
+ * Datadog sites as people say them (add-multi-site design M9). One place, so the Detector and Notifier
  * always agree: a short label for titles ("EU", "US1"...) and the host that serves a site's web pages. Both are O(1)
  * lookups in a small fixed map; an unknown site is shown as it is.
  */

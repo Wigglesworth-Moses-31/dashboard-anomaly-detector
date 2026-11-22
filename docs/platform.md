@@ -139,20 +139,13 @@ notification and a short sound for new incidents (the browser asks once).
 
 | Setting | Where | Default |
 |---|---|---|
-| Which "today", and the times shown | `config-repo/application.yml` `anomaly.shared.time-zone` (shared with the Reporter) | Asia/Kolkata |
+| Which "today", and the times shown | `config-repo/application.yml` `anomaly.shared.time-zone` | Asia/Kolkata |
 | Count the day by start or by arrival (demos of old recordings) | `config-repo/notifier.yml` `day-by` | started |
 | Port for pages | `config-repo/notifier.yml` `rsocket-port` | 7104 |
 
 A commit changes them without a restart; open pages re-sync within seconds. Health: `curl -s localhost:8104/actuator/health`.
 
-## The Reporter: reports and clean-up
+## No Reporter (since remove-reporter, 22 Nov 2026)
 
-After each window ends (a day by default, in the shared time zone), the Reporter writes `reports/<day>.md`, checks it,
-then asks the Store to remove that window's raw points (keeping the last 3 hours). Missed windows are caught up on
-start (up to 2 days). Ask for a day yourself:
-```bash
-curl -s -X POST localhost:8105/reports/2026-11-15
-```
-Settings in `config-repo/reporter.yml`: `window` (1h, 2h, 3h, 4h, 6h, 8h, 12h or 24h), `grace`, `keep-before-end`,
-`catch-up` (at most 2d), `output-dir`, `keep-reports`. Health: `curl -s localhost:8105/actuator/health`. The state of
-each window is in `reports/.state.json` (pending, written, verified, cleaned).
+The Reporter service and its daily `reports/<day>.md` were removed; the live Anomalies page replaces them. Old raw
+points are removed by the Store's own limit (`raw-safety-limit` in `config-repo/store.yml`, 1 day).

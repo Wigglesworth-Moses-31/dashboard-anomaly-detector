@@ -78,12 +78,12 @@ def set_poll_interval(value):
 
 def run_scenarios():
     # Scenario: each service sees only its own settings plus shared ones
-    sources = get_json("http://localhost:8888/reporter/default")["propertySources"]
+    sources = get_json("http://localhost:8888/detector/default")["propertySources"]
     leaked = [k for s in sources for k in s["source"] if k.startswith("anomaly.collector")]
-    groups = sorted(get_json("http://localhost:8105/actuator/settings"))
+    groups = sorted(get_json("http://localhost:8103/actuator/settings"))
     record("Each service sees only its own settings plus shared ones",
-           not leaked and groups == ["anomaly.reporter", "anomaly.shared"],
-           f"Reporter's groups: {', '.join(groups)}; Collector keys received: {len(leaked)}")
+           not leaked and groups == ["anomaly.detector", "anomaly.shared"],
+           f"Detector's groups: {', '.join(groups)}; Collector keys received: {len(leaked)}")
 
     # Scenario: add a dashboard to watch
     pid = collector_pid()
@@ -145,7 +145,7 @@ def check_secrets():
 
 
 def main():
-    for port in (8888, 8101, 8102, 8103, 8104, 8105):
+    for port in (8888, 8101, 8102, 8103, 8104):
         get_json(f"http://localhost:{port}/actuator/health")   # fails fast if something is down
     original = COLLECTOR_YML.read_text()
     try:
