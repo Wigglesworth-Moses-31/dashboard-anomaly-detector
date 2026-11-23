@@ -110,7 +110,8 @@ class DetectorScenariosTest {
 
     @Test
     void aStricterLatencyRuleNeedsThreeSteps() {
-        DetectorSettings strict = Fixtures.holderEdited(t -> t.replace("min-change: 50\n        steps: 2", "min-change: 50\n        steps: 3")
+        DetectorSettings strict = Fixtures.holderEdited(t -> t.replace("min-change: 50\n        judge-every: 10s\n        steps: 2",
+                        "min-change: 50\n        judge-every: 10s\n        steps: 3")
                 .replace("incident-scope: graph", "incident-scope: service")).get();
         detector.configure(strict, 2);
         SeriesDescriptor inv = add(latency("ffff000000000001", "/v1/invoices"));

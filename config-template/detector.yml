@@ -14,6 +14,9 @@ anomaly:
   detector:
     history: 30m                            # window for "normal" (at most 2d: the Store keeps no more)
     min-history: 10m                        # judge a line only after it has been known this long
+    slow-history: 2h                        # calmer-anomalies: normal of a rule judged on averages (judge-every) is the
+                                            #   median of this much: 24 five-minute averages (at most 2d)
+    slow-min-history: 30m                   # such a line is judged only after this much (6 averages)
     calm-period: 2m                         # all lines calm this long before an incident closes
     bau:                                    # business as usual: these anomalies need no reason (add-line-reasons)
       - { signal: general }                 #   lines no rule recognises, any direction (up, down, silent)
@@ -29,6 +32,8 @@ anomaly:
     store-address: localhost:9102           # the Store's gRPC (history for a warm start)
 
     # First match wins: put narrow rules (rates, errors) before broad ones (traffic).
+    # judge-every (calmer-anomalies): 10s (default) judges every value; 5m judges the 5-minute average on the clock
+    #   (10:00-10:05 ...), so short blips do not open anomalies. Steps then count averages. Errors stay every 10 s.
     # Patterns ignore case; * is a wildcard. Tags: key=pattern, or key!=pattern.
     rules:
       - signal: success-rate                # percentages: judged in points, a fall is bad
@@ -38,7 +43,8 @@ anomaly:
         direction: down
         points: 5
         mad-factor: 3                       # and 3 x the line's usual wobble: few requests = noisy percentages
-        steps: 3                            # 30 s: a chance dip on a low-traffic API rarely lasts 3 steps
+        judge-every: 5m                     # the 5-minute average: a 30-second dip moves it ~4 points, under the 5
+        steps: 1                            # one average beyond the rule is enough
       - signal: error-rate
         match:
           title: ["*error*rate*"]           # "Server error (5xx) rate % per service"
@@ -60,14 +66,16 @@ anomaly:
         direction: up
         factor: 3
         min-change: 0.00005
-        steps: 2
+        judge-every: 5m
+        steps: 1
       - signal: latency                     # lab.* latencies, in milliseconds
         match:
           unit: ["ms", "millisecond"]
         direction: up
         factor: 3
         min-change: 50
-        steps: 2
+        judge-every: 5m
+        steps: 1
       - signal: latency                     # trace.* latencies, in seconds
         match:
           kind: ["latency"]
@@ -75,13 +83,15 @@ anomaly:
         direction: up
         factor: 3
         min-change: 0.05
-        steps: 2
+        judge-every: 5m
+        steps: 1
       - signal: saturation
         match:
           metric: ["*cpu*", "*memory*"]
         direction: up
         points: 20
-        steps: 3
+        judge-every: 5m
+        steps: 1
       - signal: traffic                     # requests, hits and calls: a flood or a drop
         match:
           kind: ["count"]
@@ -90,10 +100,12 @@ anomaly:
         factor: 3
         min-change: 5
         mad-factor: 3                       # small counts swing by chance
-        steps: 2
+        judge-every: 5m
+        steps: 1
     general:                                # anything no rule matches
       direction: both
       mad-factor: 6                         # more than 6 x the line's usual wobble away from normal...
       at-least-factor: 2                    # ...and at least twice or half normal
       min-change: 1
-      steps: 3
+      judge-every: 5m
+      steps: 1

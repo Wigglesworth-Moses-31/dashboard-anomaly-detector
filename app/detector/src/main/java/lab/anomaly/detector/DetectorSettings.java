@@ -25,12 +25,15 @@ import lab.anomaly.kit.settings.SettingsValidator;
  * @param general            the rule for lines no rule matches
  * @param incidentScope      "graph" (default, anomaly-per-graph): one incident per region, dashboard, panel and small
  *                           graph; "service": by the first {@code groupBy} tag a line has, else its dashboard
+ * @param slowHistory        calmer-anomalies: normal of a rule judged on averages is the median of this much (default 2 h)
+ * @param slowMinHistory     a line of such a rule is judged only after this much (default 30 min)
  */
 public record DetectorSettings(Duration history, Duration minHistory, Duration calmPeriod, Duration silenceAfter,
                                double silenceMinPresence, List<String> silenceSkipSignals, List<String> groupBy,
                                List<String> upstreamTags,
                                Duration incidentRetention, String storeAddress, List<RuleSettings> rules,
-                               GeneralSettings general, List<BauSettings> bau, String incidentScope) {
+                               GeneralSettings general, List<BauSettings> bau, String incidentScope,
+                               Duration slowHistory, Duration slowMinHistory) {
 
     /**
      * Anomalies that are business as usual (add-line-reasons L2): a line whose signal (and, if given, direction: up,
@@ -67,6 +70,31 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
         rules = rules == null ? List.of() : List.copyOf(rules);
         bau = bau == null ? DEFAULT_BAU : List.copyOf(bau);
         incidentScope = incidentScope == null || incidentScope.isBlank() ? SCOPE_GRAPH : incidentScope.strip().toLowerCase(java.util.Locale.ROOT);
+        slowHistory = slowHistory == null ? Duration.ofHours(2) : slowHistory;
+        slowMinHistory = slowMinHistory == null ? Duration.ofMinutes(30) : slowMinHistory;
+    }
+
+    /** calmer-anomalies: periods {@code judge-every} may take besides one step; each divides an hour. */
+    public static final java.util.Set<Long> SLOW_MINUTES = java.util.Set.of(1L, 2L, 3L, 4L, 5L, 6L, 10L, 12L, 15L, 20L, 30L);
+    public static final String JUDGE_EVERY_PROBLEM = "must be 10s or 1 to 30 minutes dividing an hour";
+
+    /** True for a missing {@code judge-every}, {@code 10s}, or whole minutes from {@link #SLOW_MINUTES}. */
+    static boolean validJudgeEvery(Duration d) {
+        if (d == null || d.equals(Duration.ofSeconds(10))) {
+            return true;
+        }
+        return d.toSecondsPart() == 0 && d.toMillisPart() == 0 && SLOW_MINUTES.contains(d.toMinutes());
+    }
+
+    /** The longest {@code judge-every} of any rule, in milliseconds (0 when every rule judges every step). */
+    public long longestJudgeEveryMs() {
+        long max = general == null || general.judgeEvery() == null ? 0 : general.judgeEvery().toMillis();
+        for (RuleSettings r : rules) {
+            if (r.judgeEvery() != null) {
+                max = Math.max(max, r.judgeEvery().toMillis());
+            }
+        }
+        return max;
     }
 
     public static final String SCOPE_GRAPH = "graph";
@@ -79,7 +107,7 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
      * Fields are boxed so a missing value can be told apart from zero.
      */
     public record RuleSettings(String signal, MatchSettings match, String direction, Double factor, Double points,
-                               Integer steps, Double minChange, Double madFactor) {
+                               Integer steps, Double minChange, Double madFactor, Duration judgeEvery) {
     }
 
     /**
@@ -103,7 +131,8 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
     }
 
     /** The rule for lines no other rule matches: far outside the line's usual wobble (MAD). */
-    public record GeneralSettings(String direction, double madFactor, double atLeastFactor, int steps, double minChange) {
+    public record GeneralSettings(String direction, double madFactor, double atLeastFactor, int steps, double minChange,
+                                  Duration judgeEvery) {
     }
 
     static List<SettingsValidator<? super DetectorSettings>> validators() {
@@ -143,7 +172,14 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
                 SettingsValidator.require("general.mad-factor", s -> s.general() == null || s.general().madFactor() > 0, "must be above 0"),
                 SettingsValidator.require("general.at-least-factor", s -> s.general() == null || s.general().atLeastFactor() > 1,
                         "must be above 1"),
-                SettingsValidator.require("general.steps", s -> s.general() == null || s.general().steps() >= 1, "must be at least 1"));
+                SettingsValidator.require("general.steps", s -> s.general() == null || s.general().steps() >= 1, "must be at least 1"),
+                SettingsValidator.require("general.judge-every", s -> s.general() == null || validJudgeEvery(s.general().judgeEvery()),
+                        JUDGE_EVERY_PROBLEM),
+                SettingsValidator.require("slow-history", s -> s.slowHistory().compareTo(MAX_HISTORY) <= 0
+                        && s.slowHistory().toMillis() >= 3 * s.longestJudgeEveryMs() && !s.slowHistory().isNegative() && !s.slowHistory().isZero(),
+                        "at most 2 days and at least 3 times the longest judge-every"),
+                SettingsValidator.require("slow-min-history", s -> !s.slowMinHistory().isNegative()
+                        && s.slowMinHistory().compareTo(s.slowHistory()) <= 0, "must not be longer than slow-history"));
     }
 
     static List<String> ruleProblems(String name, RuleSettings r) {
@@ -178,6 +214,9 @@ public record DetectorSettings(Duration history, Duration minHistory, Duration c
         }
         if (r.madFactor() != null && r.madFactor() <= 0) {
             p.add(name + ".mad-factor: must be above 0");
+        }
+        if (!validJudgeEvery(r.judgeEvery())) {
+            p.add(name + ".judge-every: " + JUDGE_EVERY_PROBLEM);
         }
         if (r.minChange() != null && r.minChange() < 0) {
             p.add(name + ".min-change: must not be negative");

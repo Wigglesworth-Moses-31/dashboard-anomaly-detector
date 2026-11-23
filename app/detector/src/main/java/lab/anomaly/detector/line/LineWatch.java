@@ -16,11 +16,20 @@ public final class LineWatch {
     public enum Event { SKIPPED, WARMING, NONE, SPIKE_STARTED, PEAK, CALMING, RESPIKED, CALMED, SILENT }
 
     /** Limits from the settings, in milliseconds. */
-    public record Limits(long historyMs, long minHistoryMs, long calmMs) {
+    public record Limits(long historyMs, long minHistoryMs, long calmMs, long slowHistoryMs, long slowMinHistoryMs) {
+
+        public Limits(long historyMs, long minHistoryMs, long calmMs) {
+            this(historyMs, minHistoryMs, calmMs, 7_200_000, 1_800_000);
+        }
+
+        /** calmer-anomalies D3: a line judged on averages; calm ends at the first average within its rule. */
+        Limits slow() {
+            return new Limits(slowHistoryMs, slowMinHistoryMs, 0, slowHistoryMs, slowMinHistoryMs);
+        }
     }
 
     private LineFacts facts;
-    private final Window window;
+    private Window window;
     private final Presence presence;
 
     private Rule rule;
@@ -43,6 +52,13 @@ public final class LineWatch {
 
     private double madCache = Double.NaN;
     private long madTs = Long.MIN_VALUE;
+
+    // calmer-anomalies D1: a rule judged on averages; 0 = every step
+    private long periodMs;
+    private long periodStart = Long.MIN_VALUE;   // start of the open (unfinished) period
+    private double periodSum;
+    private int periodCount;
+    private boolean refill;                      // the window was cleared by a rule change: next warm start refills it
 
     public LineWatch(LineFacts facts, long historyMs) {
         this.facts = facts;
@@ -71,8 +87,33 @@ public final class LineWatch {
     }
 
     public void useRule(Rule r, long version) {
+        long p = r.periodFor(facts.stepMs());
+        if (rule != null && p != periodMs) {
+            resetJudging();              // fast <-> slow (D4): a new window, refilled from the Store
+        }
+        this.periodMs = p;
         this.rule = r;
         this.ruleVersion = version;
+    }
+
+    /** Judged on averages of this many milliseconds; 0 when judged every step. */
+    public long periodMs() {
+        return periodMs;
+    }
+
+    private void resetJudging() {
+        window = new Window(8);
+        periodStart = Long.MIN_VALUE;
+        periodSum = 0;
+        periodCount = 0;
+        knownSince = Long.MIN_VALUE;
+        madTs = Long.MIN_VALUE;
+        if (state == State.NORMAL || state == State.SUSPECT) {
+            state = State.NORMAL;
+            streak = 0;
+        }
+        warmed = false;
+        refill = true;
     }
 
     // ---- warm start -------------------------------------------------------------------------------------------
@@ -83,17 +124,52 @@ public final class LineWatch {
 
     /** Fills the history with values from the Store (all before the first live value). */
     public void warm(long[] times, double[] values, long historyMs) {
+        warm(times, values, new Limits(historyMs, 0, 0));
+    }
+
+    /**
+     * Fills the history with values from the Store (all before the first live value). A line judged on averages sums
+     * them into periods: finished periods enter the window, the last one stays open for the live values (D4).
+     * After a rule change ({@code refill}) values already seen live are used again, for the window only.
+     */
+    public void warm(long[] times, double[] values, Limits limits) {
+        long historyMs = periodMs > 0 ? limits.slowHistoryMs() : limits.historyMs();
         for (int i = 0; i < times.length; i++) {
-            if (times[i] > lastTs) {
-                window.add(times[i], values[i], historyMs);
-                presence.mark(Math.floorDiv(times[i], facts.stepMs()));
-                lastTs = times[i];
-                if (knownSince == Long.MIN_VALUE) {
-                    knownSince = times[i];
+            long ts = times[i];
+            boolean fresh = ts > lastTs;
+            if (!fresh && !refill) {
+                continue;
+            }
+            if (fresh) {
+                presence.mark(Math.floorDiv(ts, facts.stepMs()));
+                lastTs = ts;
+            }
+            if (knownSince == Long.MIN_VALUE) {
+                knownSince = ts;
+            }
+            if (periodMs > 0) {
+                long p = Math.floorDiv(ts, periodMs) * periodMs;
+                if (periodStart != Long.MIN_VALUE && p != periodStart && periodCount > 0) {
+                    window.add(periodStart, periodSum / periodCount, historyMs);
+                    periodCount = 0;
+                    periodSum = 0;
                 }
+                if (p != periodStart) {
+                    periodStart = p;
+                }
+                periodSum += values[i];
+                periodCount++;
+            } else {
+                window.add(ts, values[i], historyMs);
             }
         }
+        refill = false;
         warmed = true;
+    }
+
+    /** How far back a warm start should reach for this line. */
+    public long warmSpanMs(Limits limits) {
+        return periodMs > 0 ? limits.slowHistoryMs() : limits.historyMs();
     }
 
     public void markWarmed() {
@@ -113,7 +189,11 @@ public final class LineWatch {
 
     // ---- judging ----------------------------------------------------------------------------------------------
 
-    /** Judges one finished value. Values at or before the last judged time are repeats and are skipped. */
+    /**
+     * Judges one finished value. Values at or before the last judged time are repeats and are skipped. A line judged
+     * on averages (D1) adds the value to its open period; the first value of the next period hands the finished
+     * period's average, timed at the period's start, to the same judging.
+     */
     public Event accept(long ts, double value, Limits limits) {
         if (ts <= lastTs) {
             return Event.SKIPPED;
@@ -123,6 +203,27 @@ public final class LineWatch {
         if (knownSince == Long.MIN_VALUE) {
             knownSince = ts;
         }
+        if (periodMs <= 0) {
+            return judge(ts, value, limits);
+        }
+        long p = Math.floorDiv(ts, periodMs) * periodMs;
+        if (periodStart == p) {
+            periodSum += value;
+            periodCount++;
+            return Event.NONE;
+        }
+        Event event = Event.NONE;
+        if (periodStart != Long.MIN_VALUE && periodStart < p && periodCount > 0) {
+            event = judge(periodStart, periodSum / periodCount, limits.slow());
+        }
+        periodStart = p;
+        periodSum = value;
+        periodCount = 1;
+        return event;
+    }
+
+    /** The time of the newest judged value: the value's own time, or the start of the newest finished period. */
+    private Event judge(long ts, double value, Limits limits) {
         if (state == State.CALMING && calmSince == Long.MIN_VALUE) {
             calmSince = ts;              // resumed after a restart
         }
@@ -170,8 +271,13 @@ public final class LineWatch {
                 if (beyond != null) {
                     return updatePeak(ts, value) ? Event.PEAK : Event.NONE;
                 }
-                state = State.CALMING;
                 calmSince = ts;
+                if (limits.calmMs() <= 0) {                   // averages (D3): one average within the rule is calm
+                    state = State.NORMAL;
+                    window.add(ts, value, limits.historyMs());
+                    return Event.CALMED;
+                }
+                state = State.CALMING;
                 return Event.CALMING;
             }
             case CALMING -> {
@@ -261,6 +367,11 @@ public final class LineWatch {
 
     public boolean judgeable(long minHistoryMs) {
         return knownSince != Long.MIN_VALUE && lastTs - knownSince >= minHistoryMs && window.size() >= 3;
+    }
+
+    /** As above with the limits of the line's own speed (calmer-anomalies). */
+    public boolean judgeable(Limits limits) {
+        return judgeable(periodMs > 0 ? limits.slowMinHistoryMs() : limits.minHistoryMs());
     }
 
     public long spikeStart() {

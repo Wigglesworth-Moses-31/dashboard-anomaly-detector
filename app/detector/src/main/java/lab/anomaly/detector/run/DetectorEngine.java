@@ -276,7 +276,7 @@ public class DetectorEngine {
     /** Warm start (design D3): the line's values from the Store for the history window before its first value. */
     private void warm(String seriesId, long firstTs) {
         stats.warmCalls.incrementAndGet();
-        long from = firstTs - settings.get().history().toMillis();
+        long from = firstTs - detector.warmSpanMs(seriesId);        // 2 h for a line judged on averages
         try {
             StoreHistory.Values v = store.history(seriesId, from, firstTs);
             detector.warm(seriesId, v.times(), v.values());

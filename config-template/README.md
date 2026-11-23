@@ -8,7 +8,7 @@ its settings: nothing is fixed in code.
 |---|---|---|
 | `application.yml` | every service | `anomaly.shared.time-zone` (the page and the reports) |
 | `collector.yml` | Collector | `dashboards`, `dashboard-filters`, `classification` |
-| `detector.yml` | Detector | `rules`, `group-by` |
+| `detector.yml` | Detector | `rules` (with `judge-every`: 10s or 5m averages), `group-by`, `slow-history` |
 | `store.yml` | Store | storage limits (2 days by default, at most 7) |
 | `notifier.yml` | Notifier | `day-by` |
 

@@ -5,7 +5,16 @@ package lab.anomaly.detector.rules;
  *
  * @param needsMad only the general rule needs the line's wobble
  */
-public record Rule(String name, String signal, Measure measure, int steps, boolean needsMad) {
+public record Rule(String name, String signal, Measure measure, int steps, boolean needsMad, long judgeEveryMs) {
+
+    public Rule(String name, String signal, Measure measure, int steps, boolean needsMad) {
+        this(name, signal, measure, steps, needsMad, 0);
+    }
+
+    /** calmer-anomalies: judged on averages of {@code judgeEveryMs} when that is longer than the line's step. */
+    public long periodFor(long stepMs) {
+        return judgeEveryMs > stepMs ? judgeEveryMs : 0;
+    }
 
     public boolean isGeneral() {
         return "general".equals(name);

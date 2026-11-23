@@ -35,7 +35,7 @@ public final class RuleBook {
         GeneralSettings g = settings.general();
         this.general = new Rule("general", "general",
                 new Measure.Wobble(g.madFactor(), g.atLeastFactor(), g.minChange(), up(g.direction()), down(g.direction())),
-                g.steps(), true);
+                g.steps(), true, millis(g.judgeEvery()));
     }
 
     public long version() {
@@ -57,7 +57,11 @@ public final class RuleBook {
         Measure measure = r.factor() != null
                 ? new Measure.Factor(r.factor(), minChange, up(r.direction()), down(r.direction()), mad)
                 : new Measure.Points(r.points(), up(r.direction()), down(r.direction()), mad);
-        return new Rule(name, r.signal(), measure, r.steps(), mad > 0);
+        return new Rule(name, r.signal(), measure, r.steps(), mad > 0, millis(r.judgeEvery()));
+    }
+
+    private static long millis(java.time.Duration d) {
+        return d == null ? 0 : d.toMillis();
     }
 
     private static boolean up(String direction) {

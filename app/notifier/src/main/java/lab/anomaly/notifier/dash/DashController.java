@@ -22,7 +22,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * The dashboard pages' answers (add-dashboard-view D2–D4):
  * <pre>
  * GET /dash/catalogue                                 sites → dashboards → groups → panels → lines (no values)
- * GET /dash/range?dashboard=&lt;id&gt;&range=1h&width=600  every line of a dashboard, one Store call, thinned
  * GET /dash/panel?panel=&lt;id&gt;&range=1h&width=1000     every line of one panel
  * GET /dash/line?id=&lt;line&gt;&range=1h&width=1000       one line, with where it is shown
  * GET /dash/live?lines=a,b,c                          Server-Sent Events: newest points of those lines, every second
@@ -52,18 +51,6 @@ public class DashController implements HealthIndicator {
         }
         out.put("sites", sites);
         return out;
-    }
-
-    @GetMapping("/dash/range")
-    public ResponseEntity<Map<String, Object>> range(@RequestParam String dashboard, @RequestParam(defaultValue = "1h") String range,
-                                                     @RequestParam(defaultValue = "600") int width) {
-        Catalogue.Dashboard d = dash.catalogue().dashboard(dashboard);
-        if (d == null) {
-            return ResponseEntity.status(404).body(Map.of("problem", "no such dashboard"));
-        }
-        Set<String> ids = new LinkedHashSet<>();
-        d.groups().forEach(g -> g.panels().forEach(p -> p.lines().forEach(l -> ids.add(l.id()))));
-        return answer(new ArrayList<>(ids), range, width);
     }
 
     @GetMapping("/dash/panel")

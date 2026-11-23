@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live anomalies (mock)</title>
+<style>
+/* The look of the Incidents page of 16-18 Nov 2026 (app.css at 06f5f58), with today's features. Mock data only. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+  --red: #d93a3a; --amber: #d98a00; --blue: #2f6fe0; --violet: #7a4fd6; --grey: #8a919e; --green: #1f9d55;
+  --meter-bg: #eceff4; --highlight: #fff4d6; --band: rgba(217,58,58,.10); --faded: #c3c8d2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #11141a; --panel: #1a1e26; --text: #e6e9ef; --muted: #8d95a6; --line: #2a303b;
+    --red: #ff6b6b; --amber: #f2b23d; --blue: #6aa1ff; --violet: #a98bff; --grey: #8a919e; --green: #43c37a;
+    --meter-bg: #2a303b; --highlight: #3a3220; --band: rgba(255,107,107,.14); --faded: #4a5160;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+.top { position: sticky; top: 0; z-index: 2; display: flex; gap: 14px; align-items: center; padding: 10px 20px;
+  background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.brand { font-weight: 650; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.dot-logo { width: 10px; height: 10px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 25%, transparent); }
+.tabs { display: flex; gap: 4px; margin-left: 12px; }
+.tab { color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: 8px; }
+.tab.active { color: var(--text); background: var(--meter-bg); }
+.tab .badge { background: var(--amber); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; margin-left: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); color: var(--muted); padding: 4px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+.seg button.on { background: var(--meter-bg); color: var(--text); font-weight: 550; }
+select.range { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 13px; }
+.zoom { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); }
+.zoom button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; width: 24px; height: 24px; cursor: pointer; }
+.zoom span { width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.conn { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+.pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--meter-bg); }
+.pill.connected { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.muted { color: var(--muted); font-size: 12px; }
+.toggles { display: flex; gap: 6px; }
+.toggle { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+.toggle.on { border-color: var(--blue); color: var(--blue); }
+main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 60px; }
+.mock-note { border: 1px dashed var(--violet); color: var(--violet); border-radius: 8px; padding: 6px 12px; font-size: 12px; margin-bottom: 12px; }
+.s-notice { background: var(--highlight); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; display: flex; gap: 12px; align-items: center; }
+.s-notice .bar { flex: 0 0 160px; height: 6px; border-radius: 3px; background: var(--meter-bg); overflow: hidden; }
+.s-notice .bar i { display: block; height: 100%; width: 40%; background: var(--amber); }
+.day-title { color: var(--muted); margin: 4px 0 10px; }
+.cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; min-width: 120px; }
+.card .num { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.card.open .num { color: var(--red); } .card.wait .num { color: var(--amber); }
+.card .lbl { color: var(--muted); font-size: 12px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+.count { color: var(--text); }
+.calm-note { font-size: 12px; margin: -4px 0 8px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.t-view { font-weight: 600; margin: 10px 0 2px; color: var(--muted); font-size: 12px; }
+.t-view b { color: var(--text); }
+.inc { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--grey); border-radius: 8px; padding: 10px 14px; }
+.inc.s-red { border-left-color: var(--red); } .inc.s-amber { border-left-color: var(--amber); }
+.inc-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; cursor: pointer; }
+.chev { color: var(--muted); transition: transform .15s; display: inline-block; }
+.inc.expanded > .inc-head .chev { transform: rotate(90deg); }
+.title { font-weight: 600; }
+.crumb { color: var(--muted); font-weight: 400; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--meter-bg); color: var(--muted); white-space: nowrap; }
+.tag.fast { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.when { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.links a { color: var(--blue); text-decoration: none; margin-left: 10px; font-size: 12px; }
+.links a:hover { text-decoration: underline; }
+.lines { margin-top: 8px; display: grid; grid-template-columns: minmax(110px, auto) minmax(150px, 1fr) minmax(90px, auto) minmax(110px, auto) 150px; gap: 4px 14px; align-items: center; }
+.lines .sig { font-weight: 550; } .lines .val { font-variant-numeric: tabular-nums; text-align: right; }
+.lines .norm { color: var(--muted); font-variant-numeric: tabular-nums; }
+.lines .tags { font-size: 12px; overflow-wrap: anywhere; }
+.meter { display: flex; align-items: center; gap: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.meter .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--meter-bg); overflow: hidden; }
+.meter .fill { display: block; height: 100%; }
+.c-red { color: var(--red); } .c-amber { color: var(--amber); } .c-green { color: var(--green); }
+.f-red { background: var(--red); } .f-amber { background: var(--amber); } .f-grey { background: var(--grey); }
+.body { display: none; margin-top: 10px; }
+.inc.expanded > .body { display: block; }
+.graph { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 4px; position: relative; }
+.graph-head { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.graph-head .gt { font-weight: 550; }
+.graph-head .acts { margin-left: auto; display: flex; gap: 10px; font-size: 12px; }
+.graph-head .acts a { color: var(--blue); text-decoration: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin: 4px 0 2px; }
+.legend span { cursor: pointer; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.legend span.on { color: var(--text); font-weight: 550; }
+.legend i { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+svg.chart { width: 100%; height: calc(200px * var(--z, 1)); display: block; }
+.fold { margin-top: 8px; }
+.fold > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
+.fold > summary b { color: var(--text); font-weight: 550; }
+.small-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(300px * var(--z, 1)), 1fr)); gap: 8px; margin-top: 6px; }
+.small-grid svg.chart { height: calc(120px * var(--z, 1)); }
+.callers { display: flex; flex-direction: column; gap: 2px; font-size: 13px; margin: 6px 0; }
+.reason-box { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; flex-wrap: wrap; }
+.reason-in { flex: 1 1 260px; min-height: 30px; resize: vertical; background: var(--meter-bg); color: inherit;
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
+.reason-count { color: var(--muted); font-size: 11px; align-self: center; }
+.reason-send { background: var(--blue); color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+.closed-head { display: flex; align-items: center; gap: 12px; }
+.closed-head h2 { margin-right: auto; }
+#filter { width: 220px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+.groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--meter-bg); cursor: pointer; border: 0; color: var(--text); }
+.closed-list { gap: 4px; }
+.closed-list .inc { padding: 6px 12px; }
+.endt { color: var(--muted); font-variant-numeric: tabular-nums; width: 90px; }
+.reason-shown { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.inc.bau-only { opacity: .6; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); display: none; white-space: nowrap; z-index: 3; }
+@media (max-width: 700px) {
+  .conn { margin-left: 0; } .tabs { margin-left: 0; }
+  .lines { grid-template-columns: 1fr 1fr; } .lines .tags, .lines .meter { grid-column: span 2; }
+  #filter { width: 140px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot-logo"></span>Live anomalies</div>
+  <nav class="tabs" aria-label="Views">
+    <a href="#" class="tab active">Anomalies <span class="badge" title="Need a reason">1</span></a>
+    <a href="#" class="tab">Settings</a>
+  </nav>
+  <div class="seg" id="region"><button class="on">US</button><button>EU</button></div>
+  <select class="range" aria-label="Time range"><option>Past 15 Minutes</option><option>Past 30 Minutes</option><option selected>Past 1 Hour</option><option>Past 3 Hours</option><option>Past 6 Hours</option><option>Past 12 Hours</option><option>Past 1 Day</option></select>
+  <div class="zoom" title="Graph size (browser zoom works too)"><button id="zOut">−</button><span id="zVal">100%</span><button id="zIn">+</button></div>
+  <div class="conn"><span class="pill connected">live</span><span class="muted">last change 10:23:10</span></div>
+  <div class="toggles"><button class="toggle on" title="Desktop notification when a new anomaly opens">🔔 on</button><button class="toggle" title="Short sound when a new anomaly opens">🔊 off</button></div>
+</header>
+
+<main>
+  <div class="mock-note">Mock with made-up data: the 16–18 Nov look, with today's features. Click any card head to fold or unfold it; legend names pick one line; − / + resize the graphs.</div>
+
+  <div class="s-notice"><b>Catching up</b> 3 h 20 min after the last stop <span class="bar"><i></i></span> 40%</div>
+
+  <section>
+    <div class="day-title">Today · Mon 23 Nov 2026 · times in UTC, IST shown on hover</div>
+    <div class="cards">
+      <div class="card"><div class="num">9</div><div class="lbl">today</div></div>
+      <div class="card open"><div class="num">3</div><div class="lbl">open</div></div>
+      <div class="card wait"><div class="num">1</div><div class="lbl">need a reason</div></div>
+      <div class="card"><div class="num">5</div><div class="lbl">closed</div></div>
+      <div class="card"><div class="num">18 min</div><div class="lbl">longest</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Open <span class="count">3</span> <span class="muted" style="text-transform:none;letter-spacing:0">· worst first</span></h2>
+    <div class="t-view"><b>US</b> › Shop</div>
+    <div class="list">
+      <div class="inc s-red expanded" data-graph="sr">
+        <div class="inc-head"><span class="chev">▸</span>
+          <span class="title">Success Rates <span class="crumb">›</span> api=/v1/invoices</span>
+          <span class="tag">5-min average</span>
+          <span class="when">10:05 – now · 18 min</span>
+          <span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span>
+        </div>
+        <div class="lines">
+          <span class="sig c-red">success rate ↓</span><span class="tags">api=/v1/invoices</span>
+          <span class="val c-red">58.2%</span><span class="norm">normal 99.1%</span>
+          <span class="meter"><span class="bar"><span class="fill f-red" style="width:82%"></span></span>−41 pts</span>
+        </div>
+        <div class="body">
+          <div class="graph" data-chart="sr-main"></div>
+          <details class="fold"><summary><b>Other graphs of Success Rates</b> · 4 graphs, all fine</summary>
+            <div class="small-grid">
+              <div class="graph" data-chart="sr-o1"></div><div class="graph" data-chart="sr-o2"></div>
+              <div class="graph" data-chart="sr-o3"></div><div class="graph" data-chart="sr-o4"></div>
+            </div>
+          </details>
+          <details class="fold"><summary><b>Calls</b> · billing-core (open, latency up 3.4×)</summary>
+            <div class="callers"><span>→ <a href="#" onclick="return false" style="color:var(--blue)">upstream billing-core</a> <span class="c-red">open · latency up 3.4×</span></span></div>
+          </details>
+        </div>
+      </div>
+
+      <div class="inc s-red" data-graph="err">
+        <div class="inc-head"><span class="chev">▸</span>
+          <span class="title">Request Counts by Status <span class="crumb">›</span> all</span>
+          <span class="tag fast">every 10 s · errors</span>
+          <span class="when">10:21:40 – now · 2 min</span>
+          <span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span>
+        </div>
+        <div class="lines">
+          <span class="sig c-red">errors ↑</span><span class="tags">status_code=500 · api=/v1/invoices</span>
+          <span class="val c-red">31 / step</span><span class="norm">normal 2</span>
+          <span class="meter"><span class="bar"><span class="fill f-red" style="width:70%"></span></span>15×</span>
+        </div>
+        <div class="body"><div class="graph" data-chart="err-main"></div></div>
+      </div>
+    </div>
+
+    <div class="t-view"><b>US</b> › Partners</div>
+    <div class="list">
+      <div class="inc s-red" data-graph="up">
+        <div class="inc-head"><span class="chev">▸</span>
+          <span class="title">Upstream Latencies <span class="crumb">›</span> upstream_service=billing-core</span>
+          <span class="tag">5-min average</span>
+          <span class="when">10:10 – now · 13 min</span>
+          <span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span>
+        </div>
+        <div class="lines">
+          <span class="sig c-red">latency ↑</span><span class="tags">upstream_service=billing-core · p95</span>
+          <span class="val c-red">412 ms</span><span class="norm">normal 121 ms</span>
+          <span class="meter"><span class="bar"><span class="fill f-red" style="width:60%"></span></span>3.4×</span>
+        </div>
+        <div class="body">
+          <div class="graph" data-chart="up-main"></div>
+          <details class="fold" open><summary><b>Called by</b> · 2 APIs from upstreams.yml</summary>
+            <div class="callers">
+              <span>← /v1/invoices <span class="c-red">open · latency up 4×</span></span>
+              <span>← /v1/payments <span class="c-green">fine</span></span>
+            </div>
+            <div class="small-grid"><div class="graph" data-chart="up-c1"></div><div class="graph" data-chart="up-c2"></div></div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Needs a reason <span class="count">1</span></h2>
+    <p class="muted calm-note">Back to normal, but not closed until someone says why (the reason is kept with the anomaly).</p>
+    <div class="t-view"><b>EU</b> › Telemetry</div>
+    <div class="list">
+      <div class="inc s-amber" data-graph="tel">
+        <div class="inc-head"><span class="chev">▸</span>
+          <span class="title">Latencies <span class="crumb">›</span> api=/v1/telemetry</span>
+          <span class="tag">5-min average</span>
+          <span class="when">09:20 – 09:35 · 15 min</span>
+          <span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span>
+        </div>
+        <div class="lines">
+          <span class="sig c-amber">latency ↑</span><span class="tags">api=/v1/telemetry · avg</span>
+          <span class="val c-amber">890 ms</span><span class="norm">normal 240 ms</span>
+          <span class="meter"><span class="bar"><span class="fill f-amber" style="width:55%"></span></span>3.7×</span>
+        </div>
+        <div class="reason-box">
+          <textarea class="reason-in" placeholder="Why did this happen? (1 to 500 characters)"></textarea>
+          <span class="reason-count">0 / 500</span><button class="reason-send">Save reason</button>
+        </div>
+        <div class="body"><div class="graph" data-chart="tel-main"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="closed-head">
+      <h2>Closed today <span class="count">5</span></h2>
+      <input id="filter" type="search" placeholder="/  filter…" autocomplete="off" aria-label="Filter anomalies">
+    </div>
+    <div class="groups"><button class="chip">US › Shop · 2</button><button class="chip">US › Partners · 1</button><button class="chip">EU › Telemetry · 2</button></div>
+    <div class="list closed-list">
+      <div class="inc"><div class="inc-head"><span class="chev">▸</span><span class="endt">08:40–08:55</span>
+        <span class="title">Latencies <span class="crumb">›</span> api=/v1/invoices</span><span class="tag">5-min average</span>
+        <span class="reason-shown">“deploy 4.12 rolled back” · 09:02</span><span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span></div></div>
+      <div class="inc"><div class="inc-head"><span class="chev">▸</span><span class="endt">07:12–07:13</span>
+        <span class="title">Request Counts by Status <span class="crumb">›</span> all</span><span class="tag fast">every 10 s · errors</span>
+        <span class="reason-shown">“partner retry storm” · 07:30</span><span class="links"><a href="#" onclick="return false">Open in Datadog ↗</a></span></div></div>
+      <div class="inc bau-only"><div class="inc-head"><span class="chev">▸</span><span class="endt">06:00–06:10</span>
+        <span class="title">Requests per Partner <span class="crumb">›</span> partner=globex</span><span class="tag">5-min average</span>
+        <span class="reason-shown">BAU · fewer errors is good news</span></div></div>
+      <div class="inc"><div class="inc-head"><span class="chev">▸</span><span class="endt">03:15–03:30</span>
+        <span class="title">Latencies <span class="crumb">›</span> api=/v1/telemetry</span><span class="tag">past · found in catch-up</span>
+        <span class="reason-shown">no reason needed</span></div></div>
+      <div class="inc"><div class="inc-head"><span class="chev">▸</span><span class="endt">01:05–01:20</span>
+        <span class="title">Success Rates <span class="crumb">›</span> api=/v1/devices</span><span class="tag">5-min average</span>
+        <span class="reason-shown">“cert renewal on edge” · 01:40</span></div></div>
+    </div>
+  </section>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+// Made-up data for the mock. Times: 09:23 to 10:23, one point per minute.
+const N = 61, T0 = 9 * 60 + 23;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const PAL = ['#2f6fe0', '#1f9d55', '#7a4fd6', '#d98a00', '#0f9fb0', '#c2417a'];
+function seeded(s) { return () => (s = (s * 9301 + 49297) % 233280) / 233280; }
+function series(base, wob, seed, from, to, val) {
+  const r = seeded(seed);
+  return Array.from({ length: N }, (_, i) => (i >= from && i <= to ? val(i, r) : base + (r() - .5) * wob));
+}
+const fmtT = i => { const m = T0 + i; return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+
+const charts = {
+  'sr-main': { title: 'Success Rates › api=/v1/invoices', unit: '%', band: [42, 60], label: 'success rate down · −41 pts', hot: 0,
+    lines: [['api=/v1/invoices', series(99.1, .6, 3, 42, 60, (i, r) => 57 + r() * 3)], ['api=/v1/invoices · eu-edge', series(98.8, .8, 5, -1, -1)], ['api=/v1/invoices · us-edge', series(99.3, .5, 7, -1, -1)]] },
+  'sr-o1': { title: 'Success Rates › api=/v1/devices', unit: '%', small: true, lines: [['api=/v1/devices', series(99.5, .5, 11, -1, -1)]] },
+  'sr-o2': { title: 'Success Rates › api=/v1/payments', unit: '%', small: true, lines: [['api=/v1/payments', series(98.9, .7, 13, -1, -1)]] },
+  'sr-o3': { title: 'Success Rates › api=/v1/orders', unit: '%', small: true, lines: [['api=/v1/orders', series(99.7, .3, 17, -1, -1)]] },
+  'sr-o4': { title: 'Success Rates › api=/v1/accounts/…/state', unit: '%', small: true, lines: [['api=/v1/accounts/_id_/gateways/_mac_/security/state', series(99.2, .6, 19, -1, -1)]] },
+  'err-main': { title: 'Request Counts by Status', unit: '', band: [58.7, 60], label: 'errors up · 15×', hot: 2,
+    lines: [['status_code=200', series(480, 40, 23, -1, -1)], ['status_code=404', series(6, 3, 29, -1, -1)], ['status_code=500', series(2, 2, 31, 59, 60, (i, r) => 29 + r() * 4)], ['status_code=503', series(1, 1.5, 37, -1, -1)]] },
+  'up-main': { title: 'Upstream Latencies › upstream_service=billing-core', unit: ' ms', band: [47, 60], label: 'latency up · 3.4×', hot: 0,
+    lines: [['p95', series(121, 18, 41, 47, 60, (i, r) => 380 + r() * 60)], ['p50', series(64, 8, 43, 47, 60, (i, r) => 150 + r() * 20)]] },
+  'up-c1': { title: 'Latencies › api=/v1/invoices', unit: ' ms', small: true, band: [48, 60], hot: 0, lines: [['api=/v1/invoices', series(140, 20, 47, 48, 60, (i, r) => 520 + r() * 60)]] },
+  'up-c2': { title: 'Latencies › api=/v1/payments', unit: ' ms', small: true, lines: [['api=/v1/payments', series(95, 14, 53, -1, -1)]] },
+  'tel-main': { title: 'Latencies › api=/v1/telemetry', unit: ' ms', band: [-3, 12], label: 'latency up · 3.7× (calm since 09:35)', hot: 0,
+    lines: [['api=/v1/telemetry', series(240, 30, 59, 0, 12, (i, r) => 850 + r() * 80)], ['api=/v1/ingest', series(180, 25, 61, -1, -1)]] },
+};
+const only = {};   // chart id -> picked line index (show only one line)
+let zoom = 1;
+
+function niceTicks(lo, hi) {
+  const span = hi - lo || 1, step0 = span / 3, p = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= step0);
+  const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(+v.toFixed(6)); return t;
+}
+const short = (v, u) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : (Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v))) + u;
+
+function draw(host) {
+  const id = host.dataset.chart, c = charts[id], W = host.clientWidth - 20, H = (c.small ? 120 : 200) * zoom;
+  const pad = { l: 46, r: 8, t: 8, b: 20 }, iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const pick = only[id], shown = c.lines.map((l, k) => pick == null || pick === k);
+  const vals = c.lines.filter((_, k) => shown[k]).flatMap(l => l[1]);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const m = (hi - lo) * .08 || 1; lo -= m; hi += m;
+  const x = i => pad.l + iw * i / (N - 1), y = v => pad.t + ih * (1 - (v - lo) / (hi - lo));
+  const grid = css('--line'), muted = css('--muted'), red = css('--red');
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">`;
+  for (const t of niceTicks(lo, hi)) s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(t)}" y2="${y(t)}" stroke="${grid}"/><text x="${pad.l - 6}" y="${y(t) + 4}" text-anchor="end" font-size="11" fill="${muted}">${short(t, c.unit)}</text>`;
+  for (let i = 0; i < N - 10; i += 15) s += `<text x="${x(i)}" y="${H - 4}" text-anchor="${i === 0 ? 'start' : 'middle'}" font-size="11" fill="${muted}">${fmtT(i)}</text>`;
+  s += `<text x="${x(N - 1)}" y="${H - 4}" text-anchor="end" font-size="11" fill="${muted}">${fmtT(N - 1)}</text>`;
+  if (c.band) {
+    const a = Math.max(0, c.band[0]), b = Math.min(N - 1, c.band[1]);
+    s += `<rect x="${x(a)}" y="${pad.t}" width="${Math.max(2, x(b) - x(a))}" height="${ih}" fill="${css('--band')}"/>`;
+    if (c.label) s += `<text x="${x(a) + 4}" y="${pad.t + 13}" font-size="11" fill="${red}" font-weight="600">${c.label}</text>`;
+  }
+  c.lines.forEach((l, k) => {
+    if (!shown[k]) return;
+    const hot = c.band && k === c.hot, col = hot ? red : (c.band && pick == null ? css('--faded') : PAL[k % PAL.length]);
+    s += `<polyline fill="none" stroke="${col}" stroke-width="${hot ? 2.4 : 1.5}" points="${l[1].map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
+    if (hot) {
+      const arr = l[1], up = c.unit === '%' ? false : true;
+      let pi = c.band[0] < 0 ? 0 : c.band[0]; for (let i = Math.max(0, Math.floor(c.band[0])); i <= Math.min(N - 1, c.band[1]); i++) if (up ? arr[i] > arr[pi] : arr[i] < arr[pi]) pi = i;
+      s += `<circle cx="${x(pi)}" cy="${y(arr[pi])}" r="4" fill="${red}"/><text x="${x(pi) - 6}" y="${y(arr[pi]) + (up ? -8 : 16)}" text-anchor="end" font-size="11" fill="${red}">${short(arr[pi], c.unit)}</text>`;
+    }
+  });
+  s += `<line class="xh" x1="0" x2="0" y1="${pad.t}" y2="${pad.t + ih}" stroke="${muted}" stroke-dasharray="3 3" visibility="hidden"/></svg>`;
+  const legend = c.lines.length > 1 ? `<div class="legend">${c.lines.map((l, k) => `<span data-k="${k}" class="${pick === k ? 'on' : ''}" title="Click: show only this line; click again: all"><i style="background:${c.band && k === c.hot ? red : PAL[k % PAL.length]}"></i>${l[0]}</span>`).join('')}</div>` : '';
+  host.innerHTML = `<div class="graph-head"><span class="gt">${c.title}</span><span class="acts"><a href="#" onclick="return false">⤢ enlarge</a>${c.small ? '<a href="#" onclick="return false">Open in Datadog ↗</a>' : ''}</span></div>${legend}${s}`;
+  host.querySelectorAll('.legend span').forEach(sp => sp.onclick = () => { const k = +sp.dataset.k; only[id] = only[id] === k ? null : k; draw(host); });
+  const svg = host.querySelector('svg'), tip = document.getElementById('tip');
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect(), i = Math.round(((e.clientX - r.left) * W / r.width - pad.l) / iw * (N - 1));
+    if (i < 0 || i >= N) return;
+    crosshair(host.closest('.inc'), i);
+    tip.style.display = 'block'; tip.style.left = (e.pageX + 12) + 'px'; tip.style.top = (e.pageY + 12) + 'px';
+    tip.innerHTML = `<b>${fmtT(i)}</b><br>` + c.lines.filter((_, k) => shown[k]).map(l => `${l[0]}: ${short(l[1][i], c.unit)}`).join('<br>');
+  };
+  svg.onmouseleave = () => { tip.style.display = 'none'; crosshair(host.closest('.inc'), -1); };
+}
+// Hovering shows the same moment on every graph of the same anomaly.
+function crosshair(card, i) {
+  card.querySelectorAll('svg.chart').forEach(svg => {
+    const line = svg.querySelector('.xh'), W = svg.viewBox.baseVal.width, iw = W - 46 - 8, x = 46 + iw * i / (N - 1);
+    line.setAttribute('x1', x); line.setAttribute('x2', x); line.setAttribute('visibility', i < 0 ? 'hidden' : 'visible');
+  });
+}
+function drawVisible() { document.querySelectorAll('.inc.expanded .graph[data-chart]').forEach(h => { if (h.offsetParent) draw(h); }); }
+document.querySelectorAll('.inc[data-graph] > .inc-head').forEach(h => h.onclick = e => {
+  if (e.target.closest('a')) return; h.parentElement.classList.toggle('expanded'); drawVisible();
+});
+document.querySelectorAll('details.fold').forEach(d => d.addEventListener('toggle', drawVisible));
+const setZoom = z => { zoom = Math.min(2, Math.max(.75, z)); document.getElementById('zVal').textContent = Math.round(zoom * 100) + '%'; document.documentElement.style.setProperty('--z', zoom); drawVisible(); };
+document.getElementById('zIn').onclick = () => setZoom(zoom + .25);
+document.getElementById('zOut').onclick = () => setZoom(zoom - .25);
+document.querySelectorAll('#region button').forEach(b => b.onclick = () => { document.querySelectorAll('#region button').forEach(x => x.classList.toggle('on', x === b)); });
+document.querySelectorAll('.reason-in').forEach(t => t.oninput = () => t.nextElementSibling.textContent = t.value.length + ' / 500');
+new ResizeObserver(drawVisible).observe(document.querySelector('main'));
+drawVisible();
+</script>
+</body>
+</html>

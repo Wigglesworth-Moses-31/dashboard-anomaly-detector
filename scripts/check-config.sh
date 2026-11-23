@@ -25,4 +25,12 @@ for tmpl in "$ROOT"/config-template/*.yml; do
     fi
   done
 done
+# calmer-anomalies: rules with judge-every in the template but none in config-repo are still judged every 10 s there.
+tmpl="$ROOT/config-template/detector.yml"; mine="$ROOT/config-repo/detector.yml"
+if [ -f "$mine" ] && grep -q 'judge-every:' "$tmpl" && ! grep -q 'judge-every:' "$mine"; then
+  slow="$(awk '/^ *- signal:/{s=$3} /^ *general:/{s="general"} /judge-every: *[0-9]+m/{print s}' "$tmpl" | sort -u | tr '\n' ' ')"
+  echo "config-repo/detector.yml judges every rule every 10 s. The template judges these on 5-minute averages:"
+  echo "  $slow"
+  echo "  To take it: copy the judge-every, steps, slow-history and slow-min-history lines from config-template/detector.yml, then commit in config-repo."
+fi
 exit 0

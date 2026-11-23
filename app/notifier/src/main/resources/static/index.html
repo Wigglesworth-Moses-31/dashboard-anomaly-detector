@@ -3,32 +3,60 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live dashboards</title>
+  <title>Live anomalies</title>
   <link rel="stylesheet" href="app.css">
-  <link rel="stylesheet" href="look.css">
   <script src="vendor/echarts.min.js"></script>
   <script type="module" src="app.js"></script>
   <script type="module" src="settings.js"></script>
 </head>
 <body>
-  <nav class="leftnav" aria-label="Navigation">
-    <a class="brand" href="#" title="Live dashboards"><span class="dot-logo"></span></a>
-    <div id="regionNav" class="nav-group"></div>
-    <a href="#/anomalies" id="tabAnomalies" class="nav-item" title="Anomalies by region, dashboard and service"><span class="nav-icon">◉</span><span class="nav-label">Anomalies</span></a>
-    <a href="#settings" id="tabSettings" class="nav-item" title="Settings"><span class="nav-icon">⚙</span><span class="nav-label">Settings</span></a>
-    <div class="nav-spacer"></div>
-    <button id="attention" class="attention" type="button" aria-expanded="false" title="Open anomalies and ones that need a reason">● 0 · 0</button>
-    <div class="nav-foot">
-      <span class="pill" id="connPill" title="Live connection">connecting</span>
-      <span id="lastChange" class="muted"></span>
-      <button id="notifyBtn" class="toggle" title="Desktop notification when a new anomaly opens">🔔 off</button>
-      <button id="soundBtn" class="toggle" title="Short sound when a new anomaly opens">🔊 off</button>
+  <!-- calmer-anomalies: the look of the Incidents page (16-18 Nov 2026) with today's features -->
+  <header class="top">
+    <div class="brand"><span class="dot-logo"></span>Live anomalies</div>
+    <nav class="tabs" aria-label="Views">
+      <a href="#/anomalies" id="tabIncidents" class="tab active">Anomalies <span class="tab-badge" id="tabBadge" title="Need a reason" hidden></span></a>
+      <a href="#settings" id="tabSettings" class="tab">Settings</a>
+    </nav>
+    <div class="seg" id="regionSeg" aria-label="Region"></div>
+    <select class="range" id="rangeSel" aria-label="Time range"></select>
+    <button class="live-btn" id="liveBtn" type="button"></button>
+    <div class="zoom" title="Graph size (browser zoom works too)"><button id="zOut" type="button" aria-label="Smaller graphs">−</button><span id="zVal">100%</span><button id="zIn" type="button" aria-label="Bigger graphs">+</button></div>
+    <div class="conn"><span class="pill" id="connPill">connecting</span><span id="lastChange" class="muted"></span></div>
+    <div class="toggles">
+      <button id="notifyBtn" class="toggle" type="button" title="Desktop notification when a new anomaly opens">🔔 off</button>
+      <button id="soundBtn" class="toggle" type="button" title="Short sound when a new anomaly opens">🔊 off</button>
     </div>
-  </nav>
-  <header id="topbar" class="topbar" aria-label="Region, dashboard and time"></header>
-  <div id="attentionList" class="attention-list" hidden></div>
-  <main id="incidentsView" class="dd-main"></main>
-  <main id="settingsView" class="dd-main" hidden>
+  </header>
+  <main id="incidentsView">
+    <div class="s-notice catch-up" id="catchUp" hidden></div>
+    <section class="day">
+      <div class="day-title" id="dayTitle">Today</div>
+      <div class="cards">
+        <div class="card"><div class="num" id="cToday">0</div><div class="lbl">today</div></div>
+        <div class="card open"><div class="num" id="cOpen">0</div><div class="lbl">open</div></div>
+        <div class="card wait"><div class="num" id="cWait">0</div><div class="lbl">need a reason</div></div>
+        <div class="card"><div class="num" id="cClosed">0</div><div class="lbl">closed</div></div>
+        <div class="card"><div class="num" id="cLongest">–</div><div class="lbl">longest</div></div>
+      </div>
+    </section>
+    <div class="filter-row"><input id="filter" type="search" placeholder="/  filter by region, dashboard, panel or line…" autocomplete="off" aria-label="Filter anomalies"></div>
+    <section id="openSection">
+      <h2>Open <span class="count" id="hOpen"></span> <span class="h-note">· worst first</span></h2>
+      <div id="openList" class="list"></div>
+      <div id="quiet" class="quiet">All quiet today ✓</div>
+    </section>
+    <section id="calmSection">
+      <h2>Needs a reason <span class="count" id="hCalm"></span></h2>
+      <p class="muted calm-note">Back to normal, but not closed until someone says why (the reason is kept with the anomaly).</p>
+      <div id="calmList" class="list"></div>
+    </section>
+    <section>
+      <h2>Closed today <span class="count" id="hClosed"></span></h2>
+      <div id="groups" class="groups"></div>
+      <div id="closedList" class="list closed-list"></div>
+    </section>
+  </main>
+  <main id="settingsView" hidden>
     <section>
       <h2>Regions <span class="count" id="sCount"></span></h2>
       <p class="muted">Datadog regions to watch (at most two: US and EU) and their dashboards. Every change is one commit in

@@ -48,7 +48,8 @@ public final class Detector {
     public void configure(DetectorSettings s, long version) {
         this.settings = s;
         this.rules = new RuleBook(s, version);
-        this.limits = new LineWatch.Limits(s.history().toMillis(), s.minHistory().toMillis(), s.calmPeriod().toMillis());
+        this.limits = new LineWatch.Limits(s.history().toMillis(), s.minHistory().toMillis(), s.calmPeriod().toMillis(),
+                s.slowHistory().toMillis(), s.slowMinHistory().toMillis());
         book.configure(s.groupBy(), s.upstreamTags(), s.calmPeriod().toMillis(), s.incidentScope());   // + anomaly-per-graph
         book.setBau(s::isBau);                           // business-as-usual anomalies (add-line-reasons L2)
     }
@@ -87,14 +88,37 @@ public final class Detector {
 
     /** True when the line is described and its history has not been filled yet (warm start, design D3). */
     public boolean needsWarm(String seriesId) {
+        if (!facts.containsKey(seriesId)) {
+            return false;
+        }
         LineWatch line = lines.get(seriesId);
-        return facts.containsKey(seriesId) && (line == null || !line.warmed());
+        if (line != null) {
+            matchRule(line);             // a rule change between fast and slow asks for a refill (calmer-anomalies D4)
+        }
+        return line == null || !line.warmed();
+    }
+
+    /** How far back the warm start of this line reaches: its rule decides (calmer-anomalies D4). */
+    public long warmSpanMs(String seriesId) {
+        LineWatch line = line(seriesId);
+        if (line == null) {
+            return limits.historyMs();
+        }
+        matchRule(line);
+        return line.warmSpanMs(limits);
     }
 
     public void warm(String seriesId, long[] times, double[] values) {
         LineWatch line = line(seriesId);
         if (line != null) {
-            line.warm(times, values, limits.historyMs());
+            matchRule(line);
+            line.warm(times, values, limits);
+        }
+    }
+
+    private void matchRule(LineWatch line) {
+        if (line.needsRule(rules.version())) {
+            line.useRule(rules.ruleFor(line.facts()), rules.version());
         }
     }
 
@@ -113,9 +137,7 @@ public final class Detector {
             valuesWithoutDescription++;
             return List.of();
         }
-        if (line.needsRule(rules.version())) {
-            line.useRule(rules.ruleFor(line.facts()), rules.version());
-        }
+        matchRule(line);
         if (!line.warmed()) {
             line.markWarmed();
         }
@@ -218,7 +240,7 @@ public final class Detector {
                 View v = line.facts().primaryView();
                 general.merge(v.getViewTitle() + " / " + v.getPanelTitle(), 1, Integer::sum);
             }
-            if (!line.judgeable(limits.minHistoryMs())) {
+            if (!line.judgeable(limits)) {
                 warming++;
             }
             if (book.groupOf(line.facts()).byDashboard()) {
